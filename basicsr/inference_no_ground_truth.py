@@ -61,6 +61,10 @@ def run_inference_patched(img_lq_prev,
                           scale=1,
                           model_type='t0'):
     
+    # Move input tensors to device first
+    img_lq_prev = img_lq_prev.to(device)
+    img_lq_curr = img_lq_curr.to(device)
+    
     height, width = img_lq_curr.shape[2], img_lq_curr.shape[3]
     
     H,W = ((height+img_multiple_of)//img_multiple_of)*img_multiple_of, ((width+img_multiple_of)//img_multiple_of)*img_multiple_of
@@ -70,11 +74,8 @@ def run_inference_patched(img_lq_prev,
     img_lq_curr = torch.nn.functional.pad(img_lq_curr, (0, padw, 0, padh), 'reflect')
     img_lq_prev = torch.nn.functional.pad(img_lq_prev, (0, padw, 0, padh), 'reflect')
     
-
     # test the image tile by tile
     b, c, h, w = img_lq_curr.shape
-    # if model_type == "SR":
-    #     h,w = h*4,w*4
 
     tile = min(tile, h, w)
     assert tile % 8 == 0, "tile size should be multiple of 8"
@@ -83,8 +84,10 @@ def run_inference_patched(img_lq_prev,
     stride = tile - tile_overlap
     h_idx_list = list(range(0, h-tile, stride)) + [h-tile]
     w_idx_list = list(range(0, w-tile, stride)) + [w-tile]
-    E = torch.zeros(b, c, h, w).type_as(img_lq_curr)
-    W = torch.zeros_like(E)
+    
+    # Explicitly create accumulators on the device
+    E = torch.zeros(b, c, h, w, device=device)
+    W = torch.zeros(b, c, h, w, device=device)
 
     print(f"E: {E.shape}")
     print(f"W: {W.shape}")
@@ -100,16 +103,15 @@ def run_inference_patched(img_lq_prev,
             # prepare for SR following EAVSR.
             if model_type == "SR":
                 in_patch_prev = torch.nn.functional.interpolate(in_patch_prev, 
-                                                                    scale_factor=1/4,
-                                                                    mode="bicubic")
+                                                                scale_factor=1/4,
+                                                                mode="bicubic")
                 in_patch_curr = torch.nn.functional.interpolate(in_patch_curr, 
-                                                                    scale_factor=1/4, 
-                                                                    mode="bicubic")
+                                                                scale_factor=1/4, 
+                                                                mode="bicubic")
 
-            
             x = torch.concat((in_patch_prev.unsqueeze(0), 
-                              in_patch_curr.unsqueeze(0)), dim=1)
-            x = x.to(device)
+                            in_patch_curr.unsqueeze(0)), dim=1)
+            # x is already on device since in_patch_curr and in_patch_prev are on device
 
             if prev_patch_dict_k is not None and prev_patch_dict_v is not None:
                 old_k_cache = [x.to(device) if x is not None else None for x in prev_patch_dict_k[f"{h_idx}-{w_idx}"]]
@@ -117,17 +119,16 @@ def run_inference_patched(img_lq_prev,
             else:
                 old_k_cache = None
                 old_v_cache = None
-
-            # out_patch, k_c, v_c = model(x.float(),
-            #                             old_k_cache,
-            #                             old_v_cache)
             
             # Add mixed precision
             with torch.cuda.amp.autocast():
                 out_patch, k_c, v_c = model(x.float(), old_k_cache, old_v_cache)
-            patch_dict_k[f"{h_idx}-{w_idx}"] = [x.detach().cpu() if x is not None else None for x in k_c]
-            patch_dict_v[f"{h_idx}-{w_idx}"] = [x.detach().cpu() if x is not None else None for x in v_c]
-            out_patch = out_patch.detach().cpu()
+                
+            # Keep computation on GPU until absolutely needed on CPU
+            patch_dict_k[f"{h_idx}-{w_idx}"] = [x.detach() if x is not None else None for x in k_c]
+            patch_dict_v[f"{h_idx}-{w_idx}"] = [x.detach() if x is not None else None for x in v_c]
+            
+            # Keep out_patch on the device 
             out_patch_mask = torch.ones_like(out_patch)
 
             E[..., h_idx:(h_idx+tile), w_idx:(w_idx+tile)].add_(out_patch)
@@ -135,12 +136,14 @@ def run_inference_patched(img_lq_prev,
     
     restored = E.div_(W)
     restored = torch.clamp(restored, 0, 1)
-    return restored, patch_dict_k, patch_dict_v
+    
+    # Only move the final result to CPU when returning
+    return restored.cpu(), patch_dict_k, patch_dict_v
 
 def load_model(path, model):
-    device = torch.device("cpu")
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.load_state_dict(torch.load(path)['params'])
+    # device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.load_state_dict(torch.load(path, map_location=device)['params'])
     model = model.to(device)
     model.eval()
     print(f"> Loaded Model.")
