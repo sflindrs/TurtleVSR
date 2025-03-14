@@ -307,7 +307,7 @@ def image_process(image_path, task_name, advanced_options, progress=gr.Progress(
         img.save(img_save_path2)
         
         # Run inference
-        progress(0.5, "Running Turtle model inference")
+        progress(0.3, "Running Turtle model inference")
         inference_no_gt(
             model_path=model_path,
             model_name=f"{task_name}_{job_id}",
@@ -318,7 +318,8 @@ def image_process(image_path, task_name, advanced_options, progress=gr.Progress(
             save_image=True,
             model_type=model_type,
             do_pacthes=True,
-            image_out_path=output_dir
+            image_out_path=output_dir,
+            progress_callback=lambda value, text: progress(value, text)  # Pass the progress callback
         )
         
         # Get the output image
