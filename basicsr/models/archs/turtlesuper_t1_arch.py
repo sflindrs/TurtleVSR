@@ -285,39 +285,111 @@ class FrameHistoryRouter(nn.Module):
         num_cache_to_keep = int(self.num_frames_tocache*c/self.num_heads)
         return out, k[:, :, -num_cache_to_keep:, :], v[:, :, -num_cache_to_keep:, :]
     
+# Optimized StateAlignBlock for turtle_t1_arch.py
 class StateAlignBlock(nn.Module):
     def __init__(self, dim, num_heads, bias, num_frames_tocache, Scale_patchsize=1, plot_attn=False):
-        """
-        Initializes the StateAlignBlock module.
-        
-        Args:
-            dim (int): The input dimension.
-            num_heads (int): Number of attention heads.
-            bias (bool): Whether to use bias in convolution layers.
-            num_frames_tocache (int): Number of frames to cache for attention computation.
-            Scale_patchsize (int): Scale patch size for windowing.
-            plot_attn (bool): Whether to plot attention (used for visualization/debugging).
-        """
         super(StateAlignBlock, self).__init__()
-        self.num_heads= 1
+        self.num_heads = 1  # Fixed at 1 in original implementation
         self.temperature = nn.Parameter(torch.ones(1, 1, 1))
-
+        self.num_frames_tocache = num_frames_tocache
+        self.window_size = 2 * Scale_patchsize  # Define this BEFORE using it
+        
+        # Initial QK and V computation
         self.qk = nn.Conv2d(dim, dim*2, kernel_size=1, bias=bias)
         self.qk_dwconv = nn.Conv2d(dim*2, dim*2, kernel_size=3, stride=1, padding=1, groups=dim*2, bias=bias)
-
+        
         self.v = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
-        self.v_dwconv = nn.Conv2d(dim, dim, kernel_size=3, stride=1, padding=1, groups=dim*1, bias=bias)
-
-        self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
-        self.num_frames_tocache = num_frames_tocache 
-        self.window_size = 2 * Scale_patchsize
-
-
+        self.v_dwconv = nn.Conv2d(dim, dim, kernel_size=3, stride=1, padding=1, groups=dim, bias=bias)
+        
+        # Window processing convolutions - now window_size is already defined
         self.k2 = nn.Conv2d(dim, dim*2, kernel_size=1, bias=bias)
         self.k2_dwconv = nn.Conv2d(dim*2, dim*2, kernel_size=self.window_size, stride=self.window_size, padding=1, groups=dim*2, bias=bias)
         self.q2 = nn.Conv2d(dim, dim*2, kernel_size=1, bias=bias)
         self.q2_dwconv = nn.Conv2d(dim*2, dim*2, kernel_size=self.window_size, stride=self.window_size, padding=1, groups=dim*2, bias=bias)
-
+        
+        self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
+        
+        # Precompute attention mask for efficiency
+        self.register_buffer('local_mask', None)
+        
+        # Precompute attention masks for efficiency
+        self.register_buffer('local_mask', None)
+        
+    def create_local_attention_mask(self, h, w, n, device):
+        y_coords, x_coords = torch.meshgrid(torch.arange(h, device=device), 
+                                            torch.arange(w, device=device), 
+                                            indexing='ij')
+        coords = torch.stack([y_coords, x_coords], dim=-1).reshape(-1, 2)
+        distances = torch.cdist(coords.float(), coords.float(), p=1)
+        mask = (distances <= n).float()
+        return mask.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+        
+    def zero_out_non_top_k(self, attn_matrix, k):
+        """Keep only top-k values in the attention matrix."""
+        top_values, top_indices = torch.topk(attn_matrix, k=k, dim=-1)
+        mask = torch.zeros_like(attn_matrix)
+        mask.scatter_(dim=-1, index=top_indices, value=1.0)
+        return attn_matrix * mask
+        
+    def forward(self, x, k_cached=None, v_cached=None):
+        b, c, h, w = x.shape
+        head_dim = c // self.num_heads
+        
+        # First-stage computation
+        qk = self.qk_dwconv(self.qk(x))
+        q, k = qk.chunk(2, dim=1)
+        v = self.v_dwconv(self.v(x))
+        
+        # Process through window convolutions
+        k = self.k2_dwconv(self.k2(k))
+        q = self.q2_dwconv(self.q2(q))
+        
+        H, W = q.shape[2], q.shape[3]
+        
+        # Reshape for attention
+        q = q.view(b, 1, -1, H * W).transpose(-2, -1)
+        k = k.view(b, 1, -1, H * W).transpose(-2, -1)
+        v = v.view(b, 1, -1, h * w // (self.window_size * self.window_size))
+        
+        # Normalize
+        q = F.normalize(q, dim=-1)
+        k = F.normalize(k, dim=-1)
+        
+        # Add cached history states
+        if k_cached is not None and v_cached is not None:
+            k = torch.cat([k_cached, k], dim=1)
+            v = torch.cat([v_cached, v], dim=1)
+        
+        curr_num_frames = k.shape[1]
+        
+        # Compute attention scores
+        attn = torch.matmul(q, k.transpose(-2, -1)) * self.temperature
+        
+        # Create or retrieve local attention mask
+        if self.local_mask is None or self.local_mask.shape[-1] != H * W:
+            self.local_mask = self.create_local_attention_mask(H, W, 4, x.device)
+        
+        # Apply top-k sparsity and local masking
+        attn1 = self.zero_out_non_top_k(attn, 5)
+        attn2 = attn * self.local_mask
+        
+        # Combine masks
+        attn = attn1 + attn2
+        attn = clipped_softmax(attn)
+        
+        # Apply attention
+        out = torch.matmul(attn, v)
+        
+        # Reshape to spatial representation
+        out = out.view(b * curr_num_frames, c, h // self.window_size, w // self.window_size)
+        out = self.project_out(out)
+        out = out.view(b, curr_num_frames, c, h // self.window_size, w // self.window_size)
+        
+        # Cache key and value
+        k_to_cache = k[:, -self.num_frames_tocache:, :, :]
+        v_to_cache = v[:, -self.num_frames_tocache:, :, :]
+        
+        return out, k_to_cache, v_to_cache
 
     def zero_out_non_top_k(self, attn_matrix, k):
         """
