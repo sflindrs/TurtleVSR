@@ -178,7 +178,8 @@ def run_inference(video_name, test_loader,
                   save_img, do_patched, 
                   image_out_path, tile, 
                   tile_overlap,
-                  model_type):
+                  model_type,
+                  progress_callback=None):
     
     # Enable memory caching
     torch.backends.cudnn.benchmark = True
@@ -193,9 +194,16 @@ def run_inference(video_name, test_loader,
     previous_frame = None
 
     k_cache, v_cache = None, None
-    frame_start_time = time.time()
-    for ix in range(len(test_loader.dataset)):
-        print(ix)
+    total_frames = len(test_loader.dataset)
+    
+    for ix in range(total_frames):
+        # Update progress based on frame index
+        if progress_callback is not None:
+            # Convert to range 0.3-0.8 (assuming extraction was 0-0.3 and video creation will be 0.8-1.0)
+            progress_value = 0.3 + (0.5 * (ix + 1) / total_frames)
+            progress_callback(progress_value, f"Processing frame {ix+1}/{total_frames}")
+        
+        print(f"Processing frame {ix+1}/{total_frames}")
         current_frame = test_loader.dataset[ix][1]
 
         if previous_frame is None:
@@ -300,7 +308,8 @@ def main(model_path,
          image_out_path,
          noise_sigma=50.0/255.0,
          sample=True,
-         y_channel_PSNR=False):
+         y_channel_PSNR=False,
+         progress_callback=None):
 
     print(f"model_type: {model_type}")
     print(f"do_patches: {do_pacthes}")
@@ -312,8 +321,7 @@ def main(model_path,
     model = create_video_model(opt, model_type)
 
     model, device = load_model(model_path, model)
-    
-    # CHANGE THIS SECTION
+
     # Instead of looking for videos in the data_dir, 
     # just treat the data_dir itself as one video
     
@@ -334,16 +342,17 @@ def main(model_path,
     
     # Run inference once for all frames
     _, _ = run_inference(video_name,
-                      test_loader,
-                      model,
-                      device,
-                      model_name,
-                      save_img=save_image,
-                      do_patched=do_pacthes,
-                      image_out_path=image_out_path,
-                      tile=tile,
-                      tile_overlap=tile_overlap,
-                      model_type=model_type)
+                  test_loader,
+                  model,
+                  device,
+                  model_name,
+                  save_img=save_image,
+                  do_patched=do_pacthes,
+                  image_out_path=image_out_path,
+                  tile=tile,
+                  tile_overlap=tile_overlap,
+                  model_type=model_type,
+                  progress_callback=progress_callback)  # Pass it here
 
     return 0, 0
 
