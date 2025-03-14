@@ -462,15 +462,15 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
         progress = lambda value, desc: print(f"Progress: {value*100:.1f}% - {desc}")
     
     if video_path is None:
-        return None, None, "Please upload a video to process."
+        return None, None, None, "Please upload a video to process."
     
     # Validate video first
     valid, message = validate_video(video_path)
     if not valid:
-        return None, None, message
+        return NNone, one, None, message
     
     if task_name not in SUPPORTED_TASKS:
-        return None, None, f"Unknown task: {task_name}. Supported tasks are: {', '.join(SUPPORTED_TASKS.keys())}"
+        return None, None, None, f"Unknown task: {task_name}. Supported tasks are: {', '.join(SUPPORTED_TASKS.keys())}"
     
     # Create temporary working directories
     job_id = generate_random_id()
@@ -517,7 +517,7 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
             print(f"Limited to processing {num_frames} frames.")
         
         if num_frames == 0:
-            return None, None, "Failed to extract frames from video."
+            return None, None, None, "Failed to extract frames from video."
         
         progress(0.3, desc=f"Extracted {num_frames} frames. Starting model inference.")
         
@@ -562,7 +562,7 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
         # Verify that result directory contains processed frames
         output_frames = [f for f in os.listdir(result_dir) if 'Pred' in f and f.endswith('.png')]
         if not output_frames:
-            return None, None, f"No output frames found in {result_dir}. Processing may have failed."
+            return None, None, None, f"No output frames found in {result_dir}. Processing may have failed."
         
         # Get frame rate from the original video
         cap = cv2.VideoCapture(video_path)
@@ -618,23 +618,23 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
         comparison_video_exists = os.path.exists(comparison_video_path) and os.path.getsize(comparison_video_path) > 0
         
         if not output_video_exists and not comparison_video_exists:
-            return None, None, "Failed to create output videos. Check logs for details."
+            return None, None, None, "Failed to create output videos. Check logs for details."
         
         # Return results, with appropriate messages if one video failed
         if not output_video_exists:
-            return None, comparison_video_path, "Comparison video created, but output video failed."
+            return None, None, comparison_video_path, "Comparison video created, but output video failed."
         
         if not comparison_video_exists:
-            return output_video_path, None, "Output video created, but comparison video failed."
+            return None, output_video_path, None, "Output video created, but comparison video failed."
         
-        return output_video_path, comparison_video_path, f"Processing completed successfully. Processed {num_frames} frames.{gpu_info}"
+        return None, output_video_path, comparison_video_path, f"Processing completed successfully. Processed {num_frames} frames.{gpu_info}"
         
     except Exception as e:
         import traceback
         trace = traceback.format_exc()
         print(f"Error during processing: {str(e)}")
         print(trace)
-        return None, None, f"Error during processing: {str(e)}\n{trace}"
+        return None, None, None, f"Error during processing: {str(e)}\n{trace}"
     
     finally:
         # Don't clean up immediately so we can debug if needed
@@ -781,6 +781,23 @@ def image_process(image_path, task_name, tile_size, tile_overlap, noise_level, d
         # We'll leave cleanup for later to enable debugging
         pass
 
+# Placeholder functions - you'll need to implement these based on your existing code
+def start_processing(*args):
+    # Implement your processing logic here
+    return None, None, None, "Processing started..."
+
+def cancel_current_job(job_id):
+    """Cancel active processing job"""
+    if job_id in active_processes:
+        print(f"Attempting to cancel job {job_id}")
+        result = stop_thread(job_id)
+        if result:
+            return None, f"Processing job {job_id} has been canceled."
+        else:
+            return None, f"Failed to cancel job {job_id}"
+    else:
+        return None, f"No active job found with ID {job_id}"
+    
 def cancel_processing(job_id):
     """Cancel active processing job"""
     if job_id in active_processes:
@@ -988,7 +1005,7 @@ def create_ui():
 
                 # Add the processing logic (you'll need to implement these functions)
                 process_button.click(
-                    fn=start_processing,
+                    fn=process_video,
                     inputs=[
                         input_video, task, tile_size, tile_overlap, sample_rate, noise_level,
                         denoising_strength, advanced_params, output_format, use_custom_model,
