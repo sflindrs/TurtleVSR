@@ -24,7 +24,6 @@ sys.path.append(parent_dir)
 from basicsr.utils.options import parse
 from importlib import import_module
 from basicsr.inference_no_ground_truth import main as inference_no_gt
-from basicsr.inference_no_ground_truth import VideoLoader
 from video_to_frames import extract_frames
 
 # Global dictionary to keep track of running threads
@@ -485,13 +484,13 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
         target_fps = None if sample_rate >= 1.0 else None  # None means use original fps
         
         # Extract frames from video
-        progress(0.05, "Preparing to extract frames from video")
+        progress(0.05, desc="Preparing to extract frames from video")
         num_frames = extract_frames(video_path, frames_dir, target_fps=target_fps)
         
         if num_frames == 0:
             return None, None, "Failed to extract frames from video."
         
-        progress(0.3, f"Extracted {num_frames} frames. Starting model inference.")
+        progress(0.3, desc=f"Extracted {num_frames} frames. Starting model inference.")
         
         # Parse any custom advanced settings
         if advanced_settings and advanced_settings.strip():
@@ -527,11 +526,11 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
             do_pacthes=True,
             image_out_path=output_dir,
             noise_sigma=noise_sigma,
-            progress_callback=lambda value, text: progress(0.3 + 0.5 * value, text)
+            progress_callback=lambda value, text: progress(0.3 + 0.5 * value, desc=text)
         )
         
         # Create result video
-        progress(0.8, "Creating result videos")
+        progress(0.8, desc="Creating result videos")
         
         # Find the model output directory - it's structured as output_dir/task_name_job_id/frames_dir_basename
         model_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
@@ -559,7 +558,7 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
         video_ext = '.mp4' if output_format == 'MP4' else '.webm'
         
         # Create the comparison video with slider
-        progress(0.85, "Creating comparison video")
+        progress(0.85, desc="Creating comparison video")
         comparison_video_path = os.path.join(temp_dir, f"comparison_{job_id}{video_ext}")
         comparison_result = create_comparison_with_slider(
             frames_dir,
@@ -572,7 +571,7 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
             print(f"Warning creating comparison video: {comparison_result}")
         
         # Create regular output video from just the processed frames
-        progress(0.95, "Creating output video")
+        progress(0.95, desc="Creating output video")
         output_video_path = os.path.join(temp_dir, f"output_{job_id}{video_ext}")
         output_result = create_regular_output_video(
             result_dir,
@@ -590,7 +589,7 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
             memory_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
             gpu_info = f" | GPU Memory: {memory_used:.2f}GB / {memory_total:.2f}GB"
         
-        progress(1.0, f"Processing complete{gpu_info}")
+        progress(1.0, desc=f"Processing complete{gpu_info}")
         
         # Check that both videos exist and are valid
         output_video_exists = os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 0
@@ -681,7 +680,7 @@ def image_process(image_path, task_name, tile_size, tile_overlap, noise_level, d
             
         model_type = task_params['model_type']
         
-        progress(0.1, "Preparing images for processing")
+        progress(0.1, desc="Preparing images for processing")
         
         # Save the image to the frames directory
         img = Image.open(image_path)
@@ -693,7 +692,7 @@ def image_process(image_path, task_name, tile_size, tile_overlap, noise_level, d
         img_save_path2 = os.path.join(frames_dir, "frame_0002.png")
         img.save(img_save_path2)
         
-        progress(0.3, "Starting model inference")
+        progress(0.3, desc="Starting model inference")
         
         # Adjust noise level for denoising task
         if task_name == "Video Denoising" and noise_level is not None:
@@ -729,10 +728,10 @@ def image_process(image_path, task_name, tile_size, tile_overlap, noise_level, d
             do_pacthes=True,
             image_out_path=output_dir,
             noise_sigma=noise_sigma,
-            progress_callback=lambda value, text: progress(0.3 + 0.6 * value, text)
+            progress_callback=lambda value, text: progress(0.3 + 0.6 * value, desc=text)
         )
         
-        progress(0.9, "Processing complete, retrieving output image")
+        progress(0.9, desc="Processing complete, retrieving output image")
         
         # Find the model output directory
         model_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
@@ -751,7 +750,7 @@ def image_process(image_path, task_name, tile_size, tile_overlap, noise_level, d
         # Output the first processed frame
         output_image_path = os.path.join(result_dir, output_files[0])
         
-        progress(1.0, "Processing complete")
+        progress(1.0, desc="Processing complete")
         
         return output_image_path, "Image processing completed successfully."
         
@@ -847,7 +846,6 @@ def create_ui():
     """
     
     with gr.Blocks(css=css, title=title) as app:
-        # Store active job ID
         current_job_id = gr.State(value=None)
         
         gr.HTML(f"<h1 id='title'>Turtle 🐢</h1>")
@@ -858,7 +856,6 @@ def create_ui():
                 with gr.Row():
                     with gr.Column(scale=1):
                         # Input section
-                        # Fix: Changed Video component to remove type="filepath" parameter
                         input_video = gr.Video(label="Input Video")
                         task = gr.Dropdown(
                             choices=list(SUPPORTED_TASKS.keys()),
@@ -867,13 +864,11 @@ def create_ui():
                         )
                         
                         # Control panel section (moved to top)
-                        with gr.Group(elem_classes="control-panel"):
+                        with gr.Group():
                             with gr.Row():
                                 # Process and Cancel buttons at the top
-                                with gr.Column(scale=1):
-                                    process_button = gr.Button("Process Video", variant="primary", interactive=True)
-                                with gr.Column(scale=1):
-                                    cancel_button = gr.Button("Cancel Processing", variant="stop", interactive=False)
+                                process_button = gr.Button("Process Video", variant="primary")
+                                cancel_button = gr.Button("Cancel Processing", variant="stop")
                             
                             # Add a divider
                             gr.Markdown("---")
@@ -881,47 +876,41 @@ def create_ui():
                             # Basic settings section
                             with gr.Accordion("Basic Settings", open=True):
                                 with gr.Row():
-                                    with gr.Column(scale=1):
-                                        tile_size = gr.Slider(
-                                            minimum=32, maximum=512, value=128, step=32,
-                                            label="Tile Size",
-                                            info="Larger values use more memory but may provide better quality"
-                                        )
-                                    with gr.Column(scale=1):
-                                        tile_overlap = gr.Slider(
-                                            minimum=0, maximum=64, value=4, step=4,
-                                            label="Tile Overlap",
-                                            info="Higher overlap can reduce tiling artifacts"
-                                        )
+                                    tile_size = gr.Slider(
+                                        minimum=32, maximum=512, value=128, step=32,
+                                        label="Tile Size",
+                                        info="Larger values use more memory but may provide better quality"
+                                    )
+                                    tile_overlap = gr.Slider(
+                                        minimum=0, maximum=64, value=4, step=4,
+                                        label="Tile Overlap",
+                                        info="Higher overlap can reduce tiling artifacts"
+                                    )
                                 with gr.Row():
-                                    with gr.Column(scale=1):
-                                        sample_rate = gr.Slider(
-                                            minimum=0.1, maximum=1.0, value=1.0, step=0.1,
-                                            label="Frame Sample Rate",
-                                            info="Lower values process fewer frames (faster but may reduce temporal consistency)"
-                                        )
-                                    with gr.Column(scale=1):
-                                        output_format = gr.Dropdown(
-                                            choices=["MP4", "WebM"],
-                                            value="MP4",
-                                            label="Output Format"
-                                        )
+                                    sample_rate = gr.Slider(
+                                        minimum=0.1, maximum=1.0, value=1.0, step=0.1,
+                                        label="Frame Sample Rate",
+                                        info="Lower values process fewer frames (faster but may reduce temporal consistency)"
+                                    )
+                                    output_format = gr.Dropdown(
+                                        choices=["MP4", "WebM"],
+                                        value="MP4",
+                                        label="Output Format"
+                                    )
                             
                             # Advanced Settings (collapsed by default)
                             with gr.Accordion("Advanced Settings", open=False):
                                 with gr.Row():
-                                    with gr.Column(scale=1):
-                                        noise_level = gr.Slider(
-                                            minimum=0, maximum=255, value=50, step=5,
-                                            label="Noise Level",
-                                            info="Only applies to denoising tasks (higher = more noise removal)"
-                                        )
-                                    with gr.Column(scale=1):
-                                        denoising_strength = gr.Slider(
-                                            minimum=0.0, maximum=1.0, value=0.5, step=0.1,
-                                            label="Denoising Strength",
-                                            info="Strength of denoising effect"
-                                        )
+                                    noise_level = gr.Slider(
+                                        minimum=0, maximum=255, value=50, step=5,
+                                        label="Noise Level",
+                                        info="Only applies to denoising tasks (higher = more noise removal)"
+                                    )
+                                    denoising_strength = gr.Slider(
+                                        minimum=0.0, maximum=1.0, value=0.5, step=0.1,
+                                        label="Denoising Strength",
+                                        info="Strength of denoising effect"
+                                    )
                                 
                                 # Additional advanced parameters as free text
                                 advanced_params = gr.Textbox(
@@ -935,7 +924,8 @@ def create_ui():
                                     label="Use Custom Model",
                                     value=False
                                 )
-                                with gr.Group(visible=False) as custom_model_group:
+                                custom_model_group = gr.Group(visible=False)
+                                with custom_model_group:
                                     custom_model_path = gr.Textbox(
                                         label="Custom Model Path",
                                         placeholder="Path to custom model file (.pth)"
@@ -947,7 +937,7 @@ def create_ui():
                                 
                                 # Make custom model section visible when checkbox is checked
                                 use_custom_model.change(
-                                    fn=lambda x: gr.Group(visible=x),
+                                    fn=lambda x: gr.update(visible=x),
                                     inputs=[use_custom_model],
                                     outputs=[custom_model_group]
                                 )
@@ -955,15 +945,13 @@ def create_ui():
                         # Status output
                         status_output = gr.Textbox(
                             label="Status",
-                            placeholder="Upload a video and select processing options...",
-                            interactive=False
+                            placeholder="Upload a video and select processing options..."
                         )
                         
                     # Output section
                     with gr.Column(scale=1):
-                        # Fix: Removed interactive parameter from Video components
-                        result_video = gr.Video(label="Result Video", elem_classes="vertical-video")
-                        comparison_video = gr.Video(label="Side-by-Side Comparison", elem_classes="vertical-video")
+                        result_video = gr.Video(label="Result Video")
+                        comparison_video = gr.Video(label="Side-by-Side Comparison")
                 
                 # Define processing function with job ID tracking
                 def start_processing(video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
@@ -992,16 +980,16 @@ def create_ui():
                 # Define validation function
                 def validate_and_update(video_path):
                     if video_path is None:
-                        return "Please upload a video to process.", True
+                        return "Please upload a video to process."
                     
                     valid, message = validate_video(video_path)
-                    return message, valid
+                    return message
                 
                 # Validate video when uploaded
-                input_video.upload(
+                input_video.change(
                     fn=validate_and_update,
                     inputs=[input_video],
-                    outputs=[status_output, process_button]
+                    outputs=[status_output]
                 )
                 
                 # Process button click event
@@ -1012,34 +1000,29 @@ def create_ui():
                         denoising_strength, advanced_params, output_format, use_custom_model,
                         custom_model_path, custom_config_path
                     ],
-                    outputs=[current_job_id, result_video, comparison_video, status_output],
-                    show_progress=True
-                ).then(
-                    fn=lambda: (False, True),
-                    inputs=None,
-                    outputs=[process_button, cancel_button]
+                    outputs=[current_job_id, result_video, comparison_video, status_output]
                 )
                 
                 # Cancel button click event
                 def cancel_current_job(job_id):
                     if job_id:
                         result = cancel_processing(job_id)
-                        return None, result, True, False
-                    return None, "No active job to cancel", True, False
+                        return None, result
+                    return None, "No active job to cancel"
                 
                 cancel_button.click(
                     fn=cancel_current_job,
                     inputs=[current_job_id],
-                    outputs=[current_job_id, status_output, process_button, cancel_button]
+                    outputs=[current_job_id, status_output]
                 )
                 
                 # Create polling function to check job status
                 def check_job_status(job_id):
                     if job_id is None:
-                        return None, None, "No active job", True, False
+                        return None, None, "No active job"
                     
                     if job_id in active_processes:
-                        return None, None, "Processing in progress...", False, True
+                        return None, None, "Processing in progress..."
                     
                     # Job is complete, check for results
                     result_video_path = os.path.join(tempfile.gettempdir(), f"output_{job_id}.mp4")
@@ -1051,25 +1034,25 @@ def create_ui():
                     if result_exists or comparison_exists:
                         result_to_return = result_video_path if result_exists else None
                         comparison_to_return = comparison_video_path if comparison_exists else None
-                        return result_to_return, comparison_to_return, "Processing completed!", True, False
+                        return result_to_return, comparison_to_return, "Processing completed!"
                     
-                    return None, None, "Processing completed but no output found", True, False
+                    return None, None, "Processing completed but no output found"
                 
-                # Add poll event
-                gr.HTML('<script>window.job_check_interval = setInterval(() => {if(window.poller_obj) window.poller_obj.click();}, 5000);</script>')
-                poller = gr.Button(visible=False, elem_id="poller")
-                poller.click(
+                # Add polling timer
+                gr.HTML('<script>setInterval(() => document.getElementById("status_poller")?.click(), 5000);</script>')
+                status_poller = gr.Button("Poll Status", visible=False, elem_id="status_poller")
+                status_poller.click(
                     fn=check_job_status,
                     inputs=[current_job_id],
-                    outputs=[result_video, comparison_video, status_output, process_button, cancel_button]
+                    outputs=[result_video, comparison_video, status_output]
                 )
             
             # Image Processing Tab
             with gr.TabItem("Image Processing"):
                 with gr.Row():
                     with gr.Column(scale=1):
-                        # Input section - Fix: changed type="filepath" to source="upload"
-                        input_image = gr.Image(label="Input Image", source="upload")
+                        # Input section
+                        input_image = gr.Image(label="Input Image")
                         image_task = gr.Dropdown(
                             choices=list(SUPPORTED_TASKS.keys()),
                             value="Video Super-Resolution",
@@ -1077,41 +1060,37 @@ def create_ui():
                         )
                         
                         # Control panel for image processing
-                        with gr.Group(elem_classes="control-panel"):
+                        with gr.Group():
                             # Process button
-                            process_image_button = gr.Button("Process Image", variant="primary", interactive=True)
+                            process_image_button = gr.Button("Process Image", variant="primary")
                             
                             # Basic settings
                             with gr.Accordion("Settings", open=True):
                                 with gr.Row():
-                                    with gr.Column(scale=1):
-                                        image_tile_size = gr.Slider(
-                                            minimum=32, maximum=512, value=128, step=32,
-                                            label="Tile Size",
-                                            info="Larger values use more memory but may provide better quality"
-                                        )
-                                    with gr.Column(scale=1):
-                                        image_tile_overlap = gr.Slider(
-                                            minimum=0, maximum=64, value=4, step=4,
-                                            label="Tile Overlap",
-                                            info="Higher overlap can reduce tiling artifacts"
-                                        )
+                                    image_tile_size = gr.Slider(
+                                        minimum=32, maximum=512, value=128, step=32,
+                                        label="Tile Size",
+                                        info="Larger values use more memory but may provide better quality"
+                                    )
+                                    image_tile_overlap = gr.Slider(
+                                        minimum=0, maximum=64, value=4, step=4,
+                                        label="Tile Overlap",
+                                        info="Higher overlap can reduce tiling artifacts"
+                                    )
                             
                             # Advanced image settings
                             with gr.Accordion("Advanced Settings", open=False):
                                 with gr.Row():
-                                    with gr.Column(scale=1):
-                                        image_noise_level = gr.Slider(
-                                            minimum=0, maximum=255, value=50, step=5,
-                                            label="Noise Level",
-                                            info="Only applies to denoising tasks"
-                                        )
-                                    with gr.Column(scale=1):
-                                        image_denoising_strength = gr.Slider(
-                                            minimum=0.0, maximum=1.0, value=0.5, step=0.1,
-                                            label="Denoising Strength",
-                                            info="Strength of denoising effect"
-                                        )
+                                    image_noise_level = gr.Slider(
+                                        minimum=0, maximum=255, value=50, step=5,
+                                        label="Noise Level",
+                                        info="Only applies to denoising tasks"
+                                    )
+                                    image_denoising_strength = gr.Slider(
+                                        minimum=0.0, maximum=1.0, value=0.5, step=0.1,
+                                        label="Denoising Strength",
+                                        info="Strength of denoising effect"
+                                    )
                                 
                                 # Additional advanced parameters
                                 image_advanced_params = gr.Textbox(
@@ -1125,7 +1104,8 @@ def create_ui():
                                     label="Use Custom Model",
                                     value=False
                                 )
-                                with gr.Group(visible=False) as image_custom_model_group:
+                                image_custom_model_group = gr.Group(visible=False)
+                                with image_custom_model_group:
                                     image_custom_model_path = gr.Textbox(
                                         label="Custom Model Path",
                                         placeholder="Path to custom model file (.pth)"
@@ -1137,7 +1117,7 @@ def create_ui():
                                 
                                 # Make custom model section visible when checkbox is checked
                                 image_use_custom_model.change(
-                                    fn=lambda x: gr.Group(visible=x),
+                                    fn=lambda x: gr.update(visible=x),
                                     inputs=[image_use_custom_model],
                                     outputs=[image_custom_model_group]
                                 )
@@ -1145,8 +1125,7 @@ def create_ui():
                         # Image status output
                         image_status_output = gr.Textbox(
                             label="Status",
-                            placeholder="Upload an image and select processing options...",
-                            interactive=False
+                            placeholder="Upload an image and select processing options..."
                         )
                         
                     # Output section for image
@@ -1161,6 +1140,9 @@ def create_ui():
                                 output_image_display = gr.Image(label="")
                 
                 # Process image button click event
+                def update_images(input_img, output_img):
+                    return input_img, output_img
+                
                 process_image_button.click(
                     fn=image_process,
                     inputs=[
@@ -1168,26 +1150,25 @@ def create_ui():
                         image_noise_level, image_denoising_strength, image_advanced_params,
                         image_use_custom_model, image_custom_model_path, image_custom_config_path
                     ],
-                    outputs=[result_image, image_status_output],
-                    show_progress=True
+                    outputs=[result_image, image_status_output]
                 ).then(
-                    fn=lambda img: (img, img),
-                    inputs=[input_image],
+                    fn=update_images,
+                    inputs=[input_image, result_image],
                     outputs=[input_image_display, output_image_display]
                 )
                 
                 # Validate image when uploaded
                 def validate_image_and_update(image_path):
                     if image_path is None:
-                        return "Please upload an image to process.", True
+                        return "Please upload an image to process."
                     
                     valid, message = validate_image(image_path)
-                    return message, valid
+                    return message
                 
-                input_image.upload(
+                input_image.change(
                     fn=validate_image_and_update,
                     inputs=[input_image],
-                    outputs=[image_status_output, process_image_button]
+                    outputs=[image_status_output]
                 )
             
             # About tab
@@ -1222,9 +1203,6 @@ def create_ui():
                 
                 [CVMI-Lab/Turtle](https://github.com/CVMI-Lab/Turtle)
                 """)
-        
-        # Run pending JS for polling 
-        gr.HTML('<script>document.getElementById("poller").id = "poller_obj";</script>')
     
     return app
 
