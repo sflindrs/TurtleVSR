@@ -814,61 +814,22 @@ def create_ui():
         font-size: 1.2rem !important;
         margin-bottom: 2rem !important;
     }
-    .tag {
-        display: inline-block;
-        padding: 4px 8px;
-        background-color: #f3f4f6;
-        border-radius: 4px;
-        margin-right: 8px;
-        font-size: 0.9rem;
-        color: #4b5563;
-    }
-    .video-output-box {
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        padding: 10px;
-        background-color: #f9fafb;
-    }
-    .button-row {
-        display: flex;
-        gap: 10px;
-        justify-content: flex-start;
-        margin-top: 10px;
-    }
-    .output-container {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-    }
-    .control-panel {
-        padding: 15px;
-        border-radius: 8px;
-        background-color: #f3f4f6;
-        margin-bottom: 20px;
-    }
-    .collapse-button {
-        width: 100%;
-        text-align: left;
-        background-color: #e5e7eb;
-        border: none;
-        padding: 10px;
-        border-radius: 5px;
-        cursor: pointer;
-    }
-    .vertical-video {
-        max-height: 60vh;
-        width: auto !important;
-        margin: 0 auto;
-    }
-    /* Improved video display */
     .video-container {
         display: flex;
         flex-direction: column;
         align-items: center;
         max-height: 70vh;
         overflow: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 10px;
+        background-color: #f9fafb;
     }
-    /* Top control bar */
+    .vertical-video {
+        max-height: 60vh;
+        width: auto !important;
+        margin: 0 auto;
+    }
     .top-controls {
         display: flex;
         gap: 10px;
@@ -885,11 +846,11 @@ def create_ui():
     with gr.Blocks(css=css, title=title) as app:
         current_job_id = gr.State(value=None)
         
-        gr.HTML(f"<h1 id='title'>Turtle 🐢</h1>")
-        gr.HTML(f"<p id='subtitle'>Unified Video Restoration</p>")
+        gr.Markdown("# Turtle 🐢")
+        gr.Markdown("## Unified Video Restoration")
         
         with gr.Tabs():
-            with gr.TabItem("Video Processing"):
+            with gr.Tab("Video Processing"):
                 with gr.Row(elem_classes="top-controls"):
                     # Move the process and cancel buttons to the top
                     with gr.Column(scale=1):
@@ -910,111 +871,109 @@ def create_ui():
                         input_video = gr.Video(label="Input Video")
                         
                         # Control panel section
-                        with gr.Group():
-                            # Basic settings section
-                            with gr.Accordion("Basic Settings", open=True):
-                                with gr.Row():
-                                    tile_size = gr.Slider(
-                                        minimum=32, maximum=512, value=256, step=32,
-                                        label="Tile Size",
-                                        info="Larger values use more memory but may provide better quality"
-                                    )
-                                    tile_overlap = gr.Slider(
-                                        minimum=0, maximum=128, value=16, step=4,
-                                        label="Tile Overlap",
-                                        info="Higher overlap can reduce tiling artifacts"
-                                    )
-                                with gr.Row():
-                                    sample_rate = gr.Slider(
-                                        minimum=0.1, maximum=1.0, value=1.0, step=0.1,
-                                        label="Frame Sample Rate",
-                                        info="Lower values process fewer frames (faster but may reduce temporal consistency)"
-                                    )
-                                    output_format = gr.Dropdown(
-                                        choices=["MP4", "WebM"],
-                                        value="MP4",
-                                        label="Output Format"
-                                    )
-                                with gr.Row():
-                                    output_fps = gr.Number(
-                                        value=0, 
-                                        label="Output FPS (0 = same as input)",
-                                        info="Set the output video frame rate (0 to use original)"
-                                    )
-                                    frame_limit = gr.Number(
-                                        value=0,
-                                        label="Frames to Process (0 = all)",
-                                        info="Limit the number of frames to process (0 for all frames)"
-                                    )
+                        with gr.Accordion("Basic Settings", open=True):
+                            with gr.Row():
+                                tile_size = gr.Slider(
+                                    minimum=32, maximum=512, value=256, step=32,
+                                    label="Tile Size",
+                                    info="Larger values use more memory but may provide better quality"
+                                )
+                                tile_overlap = gr.Slider(
+                                    minimum=0, maximum=128, value=16, step=4,
+                                    label="Tile Overlap",
+                                    info="Higher overlap can reduce tiling artifacts"
+                                )
+                            with gr.Row():
+                                sample_rate = gr.Slider(
+                                    minimum=0.1, maximum=1.0, value=1.0, step=0.1,
+                                    label="Frame Sample Rate",
+                                    info="Lower values process fewer frames (faster but may reduce temporal consistency)"
+                                )
+                                output_format = gr.Dropdown(
+                                    choices=["MP4", "WebM"],
+                                    value="MP4",
+                                    label="Output Format"
+                                )
+                            with gr.Row():
+                                output_fps = gr.Number(
+                                    value=0, 
+                                    label="Output FPS (0 = same as input)",
+                                    info="Set the output video frame rate (0 to use original)"
+                                )
+                                frame_limit = gr.Number(
+                                    value=0,
+                                    label="Frames to Process (0 = all)",
+                                    info="Limit the number of frames to process (0 for all frames)"
+                                )
+                        
+                        # Advanced Settings
+                        with gr.Accordion("Advanced Settings", open=False):
+                            with gr.Row():
+                                noise_level = gr.Slider(
+                                    minimum=0, maximum=255, value=50, step=5,
+                                    label="Noise Level",
+                                    info="Only applies to denoising tasks (higher = more noise removal)"
+                                )
+                                denoising_strength = gr.Slider(
+                                    minimum=0.0, maximum=1.0, value=0.5, step=0.1,
+                                    label="Denoising Strength",
+                                    info="Strength of denoising effect"
+                                )
                             
-                            # Advanced Settings
-                            with gr.Accordion("Advanced Settings", open=False):
-                                with gr.Row():
-                                    noise_level = gr.Slider(
-                                        minimum=0, maximum=255, value=50, step=5,
-                                        label="Noise Level",
-                                        info="Only applies to denoising tasks (higher = more noise removal)"
-                                    )
-                                    denoising_strength = gr.Slider(
-                                        minimum=0.0, maximum=1.0, value=0.5, step=0.1,
-                                        label="Denoising Strength",
-                                        info="Strength of denoising effect"
-                                    )
-                                
-                                with gr.Row():
-                                    device_id = gr.Dropdown(
-                                        choices=[str(i) for i in range(torch.cuda.device_count())] if torch.cuda.is_available() else ["cpu"],
-                                        value="0" if torch.cuda.is_available() else "cpu",
-                                        label="GPU Device",
-                                        info="Select GPU device to use"
-                                    )
-                                    batch_size = gr.Number(
-                                        value=1,
-                                        label="Batch Size",
-                                        info="Number of tiles to process at once"
-                                    )
-                                
-                                with gr.Row():
-                                    model_dim = gr.Number(
-                                        value=64,
-                                        label="Model Dimension",
-                                        info="Base dimension for model (don't change unless you know what you're doing)"
-                                    )
-                                    ffn_expansion_factor = gr.Number(
-                                        value=2.66,
-                                        label="FFN Expansion Factor",
-                                        info="Expansion factor for feed-forward network"
-                                    )
-                                
-                                # Additional advanced parameters as free text
-                                advanced_params = gr.Textbox(
-                                    label="Additional Parameters",
-                                    placeholder="Enter as key=value pairs, one per line or comma-separated",
-                                    lines=2
+                            with gr.Row():
+                                device_id = gr.Dropdown(
+                                    choices=[str(i) for i in range(torch.cuda.device_count())] if torch.cuda.is_available() else ["cpu"],
+                                    value="0" if torch.cuda.is_available() else "cpu",
+                                    label="GPU Device",
+                                    info="Select GPU device to use"
                                 )
-                                
-                                # Custom model section
-                                use_custom_model = gr.Checkbox(
-                                    label="Use Custom Model",
-                                    value=False
+                                batch_size = gr.Number(
+                                    value=1,
+                                    label="Batch Size",
+                                    info="Number of tiles to process at once"
                                 )
-                                custom_model_group = gr.Group(visible=False)
-                                with custom_model_group:
-                                    custom_model_path = gr.Textbox(
-                                        label="Custom Model Path",
-                                        placeholder="Path to custom model file (.pth)"
-                                    )
-                                    custom_config_path = gr.Textbox(
-                                        label="Custom Config Path",
-                                        placeholder="Path to custom config file (.yml)"
-                                    )
-                                
-                                # Make custom model section visible when checkbox is checked
-                                use_custom_model.change(
-                                    fn=lambda x: gr.update(visible=x),
-                                    inputs=[use_custom_model],
-                                    outputs=[custom_model_group]
+                            
+                            with gr.Row():
+                                model_dim = gr.Number(
+                                    value=64,
+                                    label="Model Dimension",
+                                    info="Base dimension for model (don't change unless you know what you're doing)"
                                 )
+                                ffn_expansion_factor = gr.Number(
+                                    value=2.66,
+                                    label="FFN Expansion Factor",
+                                    info="Expansion factor for feed-forward network"
+                                )
+                            
+                            # Additional advanced parameters as free text
+                            advanced_params = gr.Textbox(
+                                label="Additional Parameters",
+                                placeholder="Enter as key=value pairs, one per line or comma-separated",
+                                lines=2
+                            )
+                            
+                            # Custom model section
+                            use_custom_model = gr.Checkbox(
+                                label="Use Custom Model",
+                                value=False
+                            )
+                            custom_model_group = gr.Group(visible=False)
+                            with custom_model_group:
+                                custom_model_path = gr.Textbox(
+                                    label="Custom Model Path",
+                                    placeholder="Path to custom model file (.pth)"
+                                )
+                                custom_config_path = gr.Textbox(
+                                    label="Custom Config Path",
+                                    placeholder="Path to custom config file (.yml)"
+                                )
+                            
+                            # Make custom model section visible when checkbox is checked
+                            use_custom_model.change(
+                                fn=lambda x: gr.update(visible=x),
+                                inputs=[use_custom_model],
+                                outputs=[custom_model_group]
+                            )
                         
                         # Status output
                         status_output = gr.Textbox(
@@ -1024,301 +983,14 @@ def create_ui():
                         
                     # Output section
                     with gr.Column(scale=1):
-                        with gr.Box(elem_classes="video-container"):
+                        with gr.Column(elem_classes="video-container"):
                             gr.Markdown("### Result Video")
-                            result_video = gr.Video(label="", elem_classes="vertical-video")
+                            result_video = gr.Video(label="")
                         
-                        with gr.Box(elem_classes="video-container"):
+                        with gr.Column(elem_classes="video-container"):
                             gr.Markdown("### Side-by-Side Comparison")
-                            comparison_video = gr.Video(label="", elem_classes="vertical-video")
-                
-                # Define processing function with job ID tracking
-                def start_processing(video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
-                                    denoising_strength, advanced_settings, output_format, use_custom_model,
-                                    custom_model_path, custom_config_path, output_fps, frame_limit, device_id,
-                                    model_dim, ffn_expansion_factor, batch_size):
-                    # Generate a new job ID
-                    job_id = generate_random_id()
-                    
-                    # Create a new thread for processing
-                    thread = threading.Thread(
-                        target=process_video_thread,
-                        args=(job_id, video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level,
-                              denoising_strength, advanced_settings, output_format, use_custom_model,
-                              custom_model_path, custom_config_path, gr.Progress(),  # Pass progress object
-                              # Additional parameters
-                              output_fps, frame_limit, device_id, model_dim, ffn_expansion_factor, batch_size)
-                    )
-                    
-                    # Store the thread in active processes
-                    active_processes[job_id] = thread
-                    
-                    # Start the thread
-                    thread.start()
-                    
-                    # Return the job ID and initial status
-                    return job_id, None, None, "Processing started. Please wait..."
-                
-                # Define validation function
-                def validate_and_update(video_path):
-                    if video_path is None:
-                        return "Please upload a video to process."
-                    
-                    valid, message = validate_video(video_path)
-                    return message
-                
-                # Validate video when uploaded
-                input_video.change(
-                    fn=validate_and_update,
-                    inputs=[input_video],
-                    outputs=[status_output]
-                )
-                
-                # Process button click event
-                process_button.click(
-                    fn=start_processing,
-                    inputs=[
-                        input_video, task, tile_size, tile_overlap, sample_rate, noise_level,
-                        denoising_strength, advanced_params, output_format, use_custom_model,
-                        custom_model_path, custom_config_path, output_fps, frame_limit, device_id,
-                        model_dim, ffn_expansion_factor, batch_size
-                    ],
-                    outputs=[current_job_id, result_video, comparison_video, status_output]
-                )
-                
-                # Cancel button click event
-                def cancel_current_job(job_id):
-                    if job_id:
-                        result = cancel_processing(job_id)
-                        return None, result
-                    return None, "No active job to cancel"
-                
-                cancel_button.click(
-                    fn=cancel_current_job,
-                    inputs=[current_job_id],
-                    outputs=[current_job_id, status_output]
-                )
-                
-                # Create polling function to check job status
-                def check_job_status(job_id):
-                    if job_id is None:
-                        return None, None, "No active job"
-                    
-                    if job_id in active_processes:
-                        return None, None, "Processing in progress..."
-                    
-                    # Job is complete, check for results
-                    result_video_path = os.path.join(tempfile.gettempdir(), f"output_{job_id}.mp4")
-                    comparison_video_path = os.path.join(tempfile.gettempdir(), f"comparison_{job_id}.mp4")
-                    
-                    result_exists = os.path.exists(result_video_path)
-                    comparison_exists = os.path.exists(comparison_video_path)
-                    
-                    if result_exists or comparison_exists:
-                        result_to_return = result_video_path if result_exists else None
-                        comparison_to_return = comparison_video_path if comparison_exists else None
-                        return result_to_return, comparison_to_return, "Processing completed!"
-                    
-                    return None, None, "Processing completed but no output found"
-                
-                # Add polling timer
-                gr.HTML('<script>setInterval(() => document.getElementById("status_poller")?.click(), 5000);</script>')
-                status_poller = gr.Button("Poll Status", visible=False, elem_id="status_poller")
-                status_poller.click(
-                    fn=check_job_status,
-                    inputs=[current_job_id],
-                    outputs=[result_video, comparison_video, status_output]
-                )
-            
-            # Image Processing Tab
-            with gr.TabItem("Image Processing"):
-                with gr.Row(elem_classes="top-controls"):
-                    # Control buttons at the top
-                    with gr.Column(scale=1):
-                        image_task = gr.Dropdown(
-                            choices=list(SUPPORTED_TASKS.keys()),
-                            value="Video Super-Resolution",
-                            label="Restoration Task"
-                        )
-                    with gr.Column(scale=1):
-                        process_image_button = gr.Button("Process Image", variant="primary")
-                
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        # Input section
-                        input_image = gr.Image(label="Input Image")
-                        
-                        # Control panel for image processing
-                        with gr.Group():
-                            # Basic settings
-                            with gr.Accordion("Settings", open=True):
-                                with gr.Row():
-                                    image_tile_size = gr.Slider(
-                                        minimum=32, maximum=512, value=256, step=32,
-                                        label="Tile Size",
-                                        info="Larger values use more memory but may provide better quality"
-                                    )
-                                    image_tile_overlap = gr.Slider(
-                                        minimum=0, maximum=128, value=16, step=4,
-                                        label="Tile Overlap",
-                                        info="Higher overlap can reduce tiling artifacts"
-                                    )
-                            
-                            # Advanced image settings
-                            with gr.Accordion("Advanced Settings", open=False):
-                                with gr.Row():
-                                    image_noise_level = gr.Slider(
-                                        minimum=0, maximum=255, value=50, step=5,
-                                        label="Noise Level",
-                                        info="Only applies to denoising tasks"
-                                    )
-                                    image_denoising_strength = gr.Slider(
-                                        minimum=0.0, maximum=1.0, value=0.5, step=0.1,
-                                        label="Denoising Strength",
-                                        info="Strength of denoising effect"
-                                    )
-                                
-                                with gr.Row():
-                                    image_device_id = gr.Dropdown(
-                                        choices=[str(i) for i in range(torch.cuda.device_count())] if torch.cuda.is_available() else ["cpu"],
-                                        value="0" if torch.cuda.is_available() else "cpu",
-                                        label="GPU Device",
-                                        info="Select GPU device to use"
-                                    )
-                                    image_model_dim = gr.Number(
-                                        value=64,
-                                        label="Model Dimension",
-                                        info="Base dimension for model"
-                                    )
-                                    image_ffn_expansion_factor = gr.Number(
-                                        value=2.66,
-                                        label="FFN Expansion Factor",
-                                        info="Expansion factor for feed-forward network"
-                                    )
-                                
-                                # Additional advanced parameters
-                                image_advanced_params = gr.Textbox(
-                                    label="Additional Parameters",
-                                    placeholder="Enter as key=value pairs, one per line or comma-separated",
-                                    lines=2
-                                )
-                                
-                                # Custom model for image processing
-                                image_use_custom_model = gr.Checkbox(
-                                    label="Use Custom Model",
-                                    value=False
-                                )
-                                image_custom_model_group = gr.Group(visible=False)
-                                with image_custom_model_group:
-                                    image_custom_model_path = gr.Textbox(
-                                        label="Custom Model Path",
-                                        placeholder="Path to custom model file (.pth)"
-                                    )
-                                    image_custom_config_path = gr.Textbox(
-                                        label="Custom Config Path",
-                                        placeholder="Path to custom config file (.yml)"
-                                    )
-                                
-                                # Make custom model section visible when checkbox is checked
-                                image_use_custom_model.change(
-                                    fn=lambda x: gr.update(visible=x),
-                                    inputs=[image_use_custom_model],
-                                    outputs=[image_custom_model_group]
-                                )
-                        
-                        # Image status output
-                        image_status_output = gr.Textbox(
-                            label="Status",
-                            placeholder="Upload an image and select processing options..."
-                        )
-                        
-                    # Output section for image
-                    with gr.Column(scale=1):
-                        with gr.Box():
-                            gr.Markdown("### Processed Image")
-                            result_image = gr.Image(label="")
-                        
-                        with gr.Box():
-                            gr.Markdown("### Before / After Comparison")
-                            with gr.Row():
-                                with gr.Column(scale=1):
-                                    input_image_display = gr.Image(label="Before")
-                                with gr.Column(scale=1):
-                                    output_image_display = gr.Image(label="After")
-                
-                # Process image button click event
-                def update_images(input_img, output_img):
-                    return input_img, output_img
-                
-                process_image_button.click(
-                    fn=image_process,
-                    inputs=[
-                        input_image, image_task, image_tile_size, image_tile_overlap,
-                        image_noise_level, image_denoising_strength, image_advanced_params,
-                        image_use_custom_model, image_custom_model_path, image_custom_config_path,
-                        # Additional params
-                        image_device_id, image_model_dim, image_ffn_expansion_factor
-                    ],
-                    outputs=[result_image, image_status_output]
-                ).then(
-                    fn=update_images,
-                    inputs=[input_image, result_image],
-                    outputs=[input_image_display, output_image_display]
-                )
-                
-                # Validate image when uploaded
-                def validate_image_and_update(image_path):
-                    if image_path is None:
-                        return "Please upload an image to process."
-                    
-                    valid, message = validate_image(image_path)
-                    return message
-                
-                input_image.change(
-                    fn=validate_image_and_update,
-                    inputs=[input_image],
-                    outputs=[image_status_output]
-                )
-            
-            # About tab
-            with gr.TabItem("About"):
-                gr.Markdown("""
-                # About Turtle 🐢
-                
-                **Turtle** is a unified video restoration model for multiple low-level vision tasks:
-                
-                * Video Super-Resolution
-                * Video Deblurring
-                * Video Deraining
-                * Rain Drop Removal
-                * Video Desnowing
-                * Video Denoising
-                
-                ## Paper
-                
-                [Learning Truncated Causal History Model for Video Restoration](https://arxiv.org/abs/2410.03936)
-                
-                ## Citation
-                
-                ```
-                @inproceedings{ghasemabadilearning,
-                  title={Learning Truncated Causal History Model for Video Restoration},
-                  author={Ghasemabadi, Amirhosein and Janjua, Muhammad Kamran and Salameh, Mohammad and Niu, Di},
-                  booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems}
-                }
-                ```
-                
-                ## GitHub Repository
-                
-                [CVMI-Lab/Turtle](https://github.com/CVMI-Lab/Turtle)
-                """)
-                
-                gr.Markdown("""
-                ## Acknowledgements
-                
-                UI adapted by Claude AI Assistant
-                """)
-    
+                            comparison_video = gr.Video(label="")
+
     return app
 
 if __name__ == "__main__":
