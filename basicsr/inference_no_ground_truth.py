@@ -190,6 +190,7 @@ def run_inference(video_name, test_loader,
 
     # Start timing
     start_time = time.time()
+    frame_start_time = start_time
 
     previous_frame = None
 
