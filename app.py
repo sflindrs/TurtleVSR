@@ -797,56 +797,108 @@ def create_ui():
     """Create the Gradio UI"""
     # Set page title and theme
     title = "Turtle 🐢: Unified Video Restoration"
-    description = """A unified video restoration model for deblurring, deraining, desnowing and more!
-    <br>For more details and source code, check the <a href='https://github.com/CVMI-Lab/Turtle'>GitHub repository</a>.
-    """
     
-    # Define CSS for better UI layout
+    # Updated CSS to support dark theme and improve interactions
     css = """
+    :root {
+        --background-primary: #1f2937;
+        --background-secondary: #111827;
+        --text-primary: #f9fafb;
+        --border-color: #374151;
+        --input-background: #374151;
+        --input-text: #f9fafb;
+    }
+
+    .dark, [data-theme='dark'] {
+        background-color: var(--background-primary) !important;
+        color: var(--text-primary) !important;
+    }
+
+    .gradio-container {
+        background-color: var(--background-primary) !important;
+    }
+
     #title { 
         text-align: center; 
         font-size: 2.5rem !important; 
         font-weight: bold;
         margin-bottom: 0.5rem !important;
+        color: var(--text-primary) !important;
     }
-    #subtitle {
-        text-align: center;
-        font-size: 1.2rem !important;
-        margin-bottom: 2rem !important;
-    }
+
     .video-container {
         display: flex;
         flex-direction: column;
         align-items: center;
         max-height: 70vh;
         overflow: auto;
-        border: 1px solid #e5e7eb;
+        border: 1px solid var(--border-color);
         border-radius: 8px;
         padding: 10px;
-        background-color: #f9fafb;
+        background-color: var(--background-secondary) !important;
     }
-    .vertical-video {
-        max-height: 60vh;
-        width: auto !important;
-        margin: 0 auto;
-    }
+
     .top-controls {
         display: flex;
         gap: 10px;
         margin-bottom: 15px;
         padding: 10px;
-        background-color: #f0f0f0;
+        background-color: var(--background-secondary) !important;
         border-radius: 5px;
         position: sticky;
         top: 0;
         z-index: 100;
     }
+
+    /* Ensure inputs and buttons have proper styling */
+    .gradio-container input, 
+    .gradio-container select, 
+    .gradio-container textarea, 
+    .gradio-container button {
+        background-color: var(--input-background) !important;
+        color: var(--input-text) !important;
+        border-color: var(--border-color) !important;
+    }
+
+    /* Improve interaction states */
+    .gradio-container input:focus, 
+    .gradio-container select:focus, 
+    .gradio-container textarea:focus {
+        border-color: #4f46e5 !important;
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.2) !important;
+    }
+
+    /* Tabs styling */
+    .tabitem {
+        background-color: var(--background-primary) !important;
+        color: var(--text-primary) !important;
+    }
+
+    /* Accordion styling */
+    .accordionitem {
+        background-color: var(--background-secondary) !important;
+        color: var(--text-primary) !important;
+        border-color: var(--border-color) !important;
+    }
+
+    /* Ensure sliders and dropdowns are visible */
+    .gradio-container .slider, 
+    .gradio-container .dropdown {
+        background-color: var(--input-background) !important;
+        color: var(--input-text) !important;
+    }
+
+    /* Fix for video and image components */
+    .gradio-video, .gradio-image {
+        background-color: var(--background-secondary) !important;
+        border-color: var(--border-color) !important;
+    }
     """
     
-    with gr.Blocks(css=css, title=title) as app:
+    with gr.Blocks(css=css, theme=gr.themes.Dark(), title=title) as app:
         current_job_id = gr.State(value=None)
         
-        gr.Markdown("# Turtle 🐢")
+        gr.Markdown("# Turtle 🐢", elem_id="title")
         gr.Markdown("## Unified Video Restoration")
         
         with gr.Tabs():
