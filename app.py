@@ -798,117 +798,63 @@ def create_ui():
     # Set page title and theme
     title = "Turtle 🐢: Unified Video Restoration"
     
-    # Updated CSS to support dark theme and improve interactions
+    # Simplified CSS to ensure interactions work while maintaining dark theme
     css = """
-    .dark {
-        --background-primary: #1f2937;
-        --background-secondary: #111827;
-        --text-primary: #f9fafb;
-        --border-color: #374151;
-        --input-background: #2c3e50;
-        --input-text: #f9fafb;
-        --accent-color: #3b82f6;
+    /* Reset Gradio default styles that might block interactions */
+    .gradio-container * {
+        pointer-events: auto !important;
+        cursor: default !important;
     }
 
+    /* Dark theme base */
     .gradio-container {
-        background-color: var(--background-primary) !important;
+        background-color: #1f2937 !important;
+        color: #f9fafb !important;
     }
 
-    /* Ensure proper styling for interactive elements */
-    .gradio-container .gradio-slider,
-    .gradio-container .gradio-dropdown,
-    .gradio-container .gradio-number,
-    .gradio-container .gradio-textbox {
-        background-color: var(--input-background) !important;
-        color: var(--input-text) !important;
-        border-color: var(--border-color) !important;
+    /* Ensure sliders are interactive */
+    .gradio-slider {
+        cursor: pointer !important;
     }
 
-    /* Slider track and thumb styling */
-    .gradio-container .gradio-slider .track {
-        background-color: var(--border-color) !important;
+    .gradio-slider .track,
+    .gradio-slider .thumb {
+        cursor: pointer !important;
     }
 
-    .gradio-container .gradio-slider .thumb {
-        background-color: var(--accent-color) !important;
-        border-color: var(--accent-color) !important;
+    /* General input styling */
+    .gradio-container input,
+    .gradio-container select,
+    .gradio-container textarea,
+    .gradio-container button {
+        background-color: #374151 !important;
+        color: #f9fafb !important;
+        border-color: #4b5563 !important;
     }
 
-    /* Hover and focus states */
-    .gradio-container .gradio-slider:hover .thumb,
-    .gradio-container .gradio-slider:focus .thumb {
-        background-color: var(--accent-color) !important;
-        opacity: 0.8;
-    }
-
-    /* Tabs and accordion */
+    /* Accordion and tab styling */
+    .gradio-accordion .label-wrap,
     .gradio-tabs .tabitem {
-        background-color: var(--background-primary) !important;
-        color: var(--text-primary) !important;
+        background-color: #111827 !important;
+        color: #f9fafb !important;
     }
 
-    .gradio-accordion .label-wrap {
-        background-color: var(--background-secondary) !important;
-        color: var(--text-primary) !important;
-    }
-
-    .gradio-accordion .content {
-        background-color: var(--background-secondary) !important;
-        color: var(--text-primary) !important;
-    }
-
-    /* Video and image containers */
+    /* Ensure video containers are visible */
     .video-container {
-        background-color: var(--background-secondary) !important;
-        border-color: var(--border-color) !important;
-        color: var(--text-primary) !important;
-    }
-
-    /* Button styling */
-    .gradio-button {
-        background-color: var(--accent-color) !important;
-        color: white !important;
-        border: none !important;
-    }
-
-    .gradio-button:hover {
-        opacity: 0.9 !important;
-    }
-
-    /* Ensure text visibility */
-    .gradio-container {
-        color: var(--text-primary) !important;
-    }
-
-    /* Title styling */
-    #title {
-        color: var(--text-primary) !important;
-        text-align: center;
+        background-color: #111827 !important;
+        border: 1px solid #374151 !important;
+        color: #f9fafb !important;
     }
     """
     
     with gr.Blocks(css=css, title=title) as app:
         current_job_id = gr.State(value=None)
         
-        gr.Markdown("# Turtle 🐢", elem_id="title")
+        gr.Markdown("# Turtle 🐢")
         gr.Markdown("## Unified Video Restoration")
         
         with gr.Tabs():
             with gr.Tab("Video Processing"):
-                with gr.Row(elem_classes="top-controls"):
-                    # Move the process and cancel buttons to the top
-                    with gr.Column(scale=1):
-                        task = gr.Dropdown(
-                            choices=list(SUPPORTED_TASKS.keys()),
-                            value="Video Super-Resolution",
-                            label="Restoration Task"
-                        )
-                    with gr.Column(scale=1):
-                        process_button = gr.Button("Process Video", variant="primary")
-                        
-                    with gr.Column(scale=1):
-                        cancel_button = gr.Button("Cancel Processing", variant="stop")
-                
                 with gr.Row():
                     with gr.Column(scale=1):
                         # Input section
@@ -1035,7 +981,29 @@ def create_ui():
                             gr.Markdown("### Side-by-Side Comparison")
                             comparison_video = gr.Video(label="")
                 
-                # Rest of the code remains the same as in the previous implementation...
+                # Process and cancel buttons
+                with gr.Row():
+                    process_button = gr.Button("Process Video", variant="primary")
+                    cancel_button = gr.Button("Cancel Processing", variant="stop")
+
+                # Add the processing logic (you'll need to implement these functions)
+                process_button.click(
+                    fn=start_processing,
+                    inputs=[
+                        input_video, task, tile_size, tile_overlap, sample_rate, noise_level,
+                        denoising_strength, advanced_params, output_format, use_custom_model,
+                        custom_model_path, custom_config_path, output_fps, frame_limit, device_id,
+                        model_dim, ffn_expansion_factor, batch_size
+                    ],
+                    outputs=[current_job_id, result_video, comparison_video, status_output]
+                )
+
+                # Cancel button functionality
+                cancel_button.click(
+                    fn=cancel_current_job,
+                    inputs=[current_job_id],
+                    outputs=[current_job_id, status_output]
+                )
 
     return app
 
