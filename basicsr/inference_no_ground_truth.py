@@ -17,7 +17,7 @@ from tqdm import tqdm
 import time
 
 sys.path.append(str(Path(__file__).parents[1]))
-from utils import tensor2img
+from basicsr.utils.util import tensor2img
 
 sys.path.append(str(Path(__file__).parents[3]))
 from basicsr.utils.options import parse
@@ -69,7 +69,8 @@ def run_inference_patched(img_lq_prev,
 
     img_lq_curr = torch.nn.functional.pad(img_lq_curr, (0, padw, 0, padh), 'reflect')
     img_lq_prev = torch.nn.functional.pad(img_lq_prev, (0, padw, 0, padh), 'reflect')
-        
+    
+
     # test the image tile by tile
     b, c, h, w = img_lq_curr.shape
     # if model_type == "SR":
@@ -117,9 +118,13 @@ def run_inference_patched(img_lq_prev,
                 old_k_cache = None
                 old_v_cache = None
 
-            out_patch, k_c, v_c = model(x.float(),
-                                        old_k_cache,
-                                        old_v_cache)
+            # out_patch, k_c, v_c = model(x.float(),
+            #                             old_k_cache,
+            #                             old_v_cache)
+            
+            # Add mixed precision
+            with torch.cuda.amp.autocast():
+                out_patch, k_c, v_c = model(x.float(), old_k_cache, old_v_cache)
             patch_dict_k[f"{h_idx}-{w_idx}"] = [x.detach().cpu() if x is not None else None for x in k_c]
             patch_dict_v[f"{h_idx}-{w_idx}"] = [x.detach().cpu() if x is not None else None for x in v_c]
             out_patch = out_patch.detach().cpu()
@@ -152,6 +157,16 @@ def run_inference(video_name, test_loader,
                   tile_overlap,
                   model_type):
     
+    # Enable memory caching
+    torch.backends.cudnn.benchmark = True
+
+    # Set memory allocation strategy
+    torch.cuda.empty_cache()
+    torch.cuda.set_per_process_memory_fraction(0.95)  # Use up to 95% of GPU memory
+
+    # Start timing
+    start_time = time.time()
+
     previous_frame = None
 
     k_cache, v_cache = None, None
@@ -219,6 +234,12 @@ def run_inference(video_name, test_loader,
             cv2.imwrite(file_name_inp, cv2.cvtColor((current_frame.permute(1, 2, 0).detach().cpu().numpy()*255).astype(np.uint8), cv2.COLOR_BGR2RGB))
 
         previous_frame = current_frame
+
+        # Calculate and print time taken for current frame
+        end_time = time.time()
+        frames_processed = len(test_loader.dataset)
+        print(f"Processed {frames_processed} frames in {end_time - start_time:.2f} seconds")
+        print(f"FPS: {frames_processed / (end_time - start_time):.2f}")
 
     return None, None
 
