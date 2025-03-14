@@ -11,6 +11,9 @@ import time
 import random
 import string
 from PIL import Image
+import threading
+import ctypes
+import inspect
 
 # Add the repository path to sys.path so we can import modules
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -23,6 +26,9 @@ from importlib import import_module
 from basicsr.inference_no_ground_truth import main as inference_no_gt
 from basicsr.inference_no_ground_truth import VideoLoader
 from video_to_frames import extract_frames
+
+# Global dictionary to keep track of running threads
+active_processes = {}
 
 # Constants
 SUPPORTED_TASKS = {
@@ -57,6 +63,28 @@ SUPPORTED_TASKS = {
         "model_type": "t0"
     }
 }
+
+def _async_raise(tid, exctype):
+    """Raises an exception in the threads with id tid"""
+    if not inspect.isclass(exctype):
+        raise TypeError("Only types can be raised (not instances)")
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(tid), ctypes.py_object(exctype))
+    if res == 0:
+        raise ValueError("Invalid thread id")
+    elif res != 1:
+        # "if it returns a number greater than one, you're in trouble,
+        # and you should call it again with exc=NULL to revert the effect"
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(tid), None)
+        raise SystemError("PyThreadState_SetAsyncExc failed")
+
+def stop_thread(thread_id):
+    """Terminates a thread by its ID"""
+    if thread_id in active_processes:
+        thread = active_processes[thread_id]
+        _async_raise(thread.ident, KeyboardInterrupt)
+        active_processes.pop(thread_id, None)
+        return True
+    return False
 
 def generate_random_id(length=8):
     """Generate a random ID string"""
@@ -379,15 +407,42 @@ def validate_video(video_path):
         est_time = total_frames / est_fps
         est_minutes = int(est_time // 60)
         est_seconds = int(est_time % 60)
+
+        aspect_ratio = width / height
+        orientation = "Vertical" if aspect_ratio < 1 else "Horizontal"
         
         if width * height > 3840 * 2160:
-            return False, f"Video resolution ({width}x{height}) is very high. Consider resizing for faster processing."
+            return False, f"{orientation} video resolution ({width}x{height}) is very high. Consider resizing for faster processing."
         
-        return True, f"Video validated. Resolution: {width}x{height}, Frames: {total_frames}, FPS: {fps:.1f}. Estimated processing time: {est_minutes}m {est_seconds}s"
+        return True, f"{orientation} video validated. Resolution: {width}x{height}, Frames: {total_frames}, FPS: {fps:.1f}. Estimated processing time: {est_minutes}m {est_seconds}s"
     except Exception as e:
         return False, f"Error validating video: {str(e)}"
 
-def process_video(video_path, task_name, tile_size, tile_overlap, output_format, use_custom_model=False, custom_model_path="", custom_config_path="", progress=gr.Progress()):
+def process_video_thread(thread_id, video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
+                         denoising_strength, advanced_settings, output_format, use_custom_model, 
+                         custom_model_path, custom_config_path, progress=None):
+    """Threaded function to process videos"""
+    try:
+        result = process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
+                               denoising_strength, advanced_settings, output_format, use_custom_model,
+                               custom_model_path, custom_config_path, progress)
+        # Remove from active processes when done
+        active_processes.pop(thread_id, None)
+        return result
+    except KeyboardInterrupt:
+        print(f"Processing was canceled for thread {thread_id}")
+        # Clean up any temporary files here
+        return (None, None, "Processing was canceled")
+    except Exception as e:
+        import traceback
+        print(f"Error in thread {thread_id}: {str(e)}")
+        print(traceback.format_exc())
+        active_processes.pop(thread_id, None)
+        return (None, None, f"Error during processing: {str(e)}")
+
+def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
+                 denoising_strength, advanced_settings, output_format, use_custom_model=False, 
+                 custom_model_path="", custom_config_path="", progress=gr.Progress()):
     """Process the uploaded video and return the result"""
     
     if video_path is None:
@@ -425,14 +480,39 @@ def process_video(video_path, task_name, tile_size, tile_overlap, output_format,
             
         model_type = task_params['model_type']
         
+        # Calculate target fps based on sample rate
+        # 1.0 = original fps, 0.5 = half fps, etc.
+        target_fps = None if sample_rate >= 1.0 else None  # None means use original fps
+        
         # Extract frames from video
         progress(0.05, "Preparing to extract frames from video")
-        num_frames = extract_frames(video_path, frames_dir)
+        num_frames = extract_frames(video_path, frames_dir, target_fps=target_fps)
         
         if num_frames == 0:
             return None, None, "Failed to extract frames from video."
         
         progress(0.3, f"Extracted {num_frames} frames. Starting model inference.")
+        
+        # Parse any custom advanced settings
+        if advanced_settings and advanced_settings.strip():
+            try:
+                # Try to parse as key=value pairs, one per line or comma-separated
+                custom_params = {}
+                for line in advanced_settings.replace(',', '\n').split('\n'):
+                    if '=' in line:
+                        key, value = line.strip().split('=', 1)
+                        custom_params[key.strip()] = value.strip()
+                        
+                print(f"Custom parameters: {custom_params}")
+            except Exception as e:
+                print(f"Failed to parse advanced settings: {str(e)}")
+        
+        # Adjust noise level for denoising task
+        if task_name == "Video Denoising" and noise_level is not None:
+            noise_sigma = float(noise_level) / 255.0
+            print(f"Using noise level: {noise_level} ({noise_sigma})")
+        else:
+            noise_sigma = 50.0 / 255.0  # Default
         
         # Run inference
         inference_no_gt(
@@ -446,6 +526,7 @@ def process_video(video_path, task_name, tile_size, tile_overlap, output_format,
             model_type=model_type,
             do_pacthes=True,
             image_out_path=output_dir,
+            noise_sigma=noise_sigma,
             progress_callback=lambda value, text: progress(0.3 + 0.5 * value, text)
         )
         
@@ -556,11 +637,16 @@ def validate_image(image_path):
         if width * height > 3840 * 2160:
             return False, f"Image resolution ({width}x{height}) is very high. Consider resizing for faster processing."
         
-        return True, f"Image validated. Resolution: {width}x{height}. Estimated processing time: {est_time:.1f} seconds"
+        aspect_ratio = width / height
+        orientation = "Vertical" if aspect_ratio < 1 else "Horizontal"
+        
+        return True, f"{orientation} image validated. Resolution: {width}x{height}. Estimated processing time: {est_time:.1f} seconds"
     except Exception as e:
         return False, f"Error validating image: {str(e)}"
 
-def image_process(image_path, task_name, tile_size, tile_overlap, use_custom_model=False, custom_model_path="", custom_config_path="", progress=gr.Progress()):
+def image_process(image_path, task_name, tile_size, tile_overlap, noise_level, denoising_strength, 
+                 advanced_settings, use_custom_model=False, custom_model_path="", 
+                 custom_config_path="", progress=gr.Progress()):
     """Process a single image and return the result"""
     
     # Validate image first
@@ -607,8 +693,30 @@ def image_process(image_path, task_name, tile_size, tile_overlap, use_custom_mod
         img_save_path2 = os.path.join(frames_dir, "frame_0002.png")
         img.save(img_save_path2)
         
+        progress(0.3, "Starting model inference")
+        
+        # Adjust noise level for denoising task
+        if task_name == "Video Denoising" and noise_level is not None:
+            noise_sigma = float(noise_level) / 255.0
+            print(f"Using noise level: {noise_level} ({noise_sigma})")
+        else:
+            noise_sigma = 50.0 / 255.0  # Default
+        
+        # Parse any custom advanced settings
+        if advanced_settings and advanced_settings.strip():
+            try:
+                # Try to parse as key=value pairs, one per line or comma-separated
+                custom_params = {}
+                for line in advanced_settings.replace(',', '\n').split('\n'):
+                    if '=' in line:
+                        key, value = line.strip().split('=', 1)
+                        custom_params[key.strip()] = value.strip()
+                        
+                print(f"Custom parameters: {custom_params}")
+            except Exception as e:
+                print(f"Failed to parse advanced settings: {str(e)}")
+        
         # Run inference
-        progress(0.3, "Running Turtle model inference")
         inference_no_gt(
             model_path=model_path,
             model_name=f"{task_name}_{job_id}",
@@ -620,34 +728,34 @@ def image_process(image_path, task_name, tile_size, tile_overlap, use_custom_mod
             model_type=model_type,
             do_pacthes=True,
             image_out_path=output_dir,
-            progress_callback=lambda value, text: progress(0.3 + 0.6 * value, text)  # Pass the progress callback
+            noise_sigma=noise_sigma,
+            progress_callback=lambda value, text: progress(0.3 + 0.6 * value, text)
         )
         
-        # Get the output image
-        progress(0.9, "Retrieving processed image")
-        result_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
-        output_files = [f for f in os.listdir(result_dir) if f.endswith('.png') and 'Pred' in f]
+        progress(0.9, "Processing complete, retrieving output image")
         
+        # Find the model output directory
+        model_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
+        frames_dir_basename = os.path.basename(frames_dir)
+        result_dir = os.path.join(model_dir, frames_dir_basename)
+        
+        # If the result_dir doesn't exist, use model_dir as a fallback
+        if not os.path.exists(result_dir):
+            result_dir = model_dir
+            
+        # Find the first output image that contains 'Pred' in its name
+        output_files = [f for f in os.listdir(result_dir) if 'Pred' in f and f.endswith('.png')]
         if not output_files:
-            return None, "No output image was produced."
+            return None, f"No output images found in {result_dir}. Processing may have failed."
         
-        # Get the first processed image
+        # Output the first processed frame
         output_image_path = os.path.join(result_dir, output_files[0])
-        output_image = Image.open(output_image_path)
         
-        # Resource usage info
-        gpu_info = ""
-        if torch.cuda.is_available():
-            memory_used = torch.cuda.memory_allocated() / 1024**3
-            gpu_info = f" | GPU Memory: {memory_used:.2f}GB used"
+        progress(1.0, "Processing complete")
         
-        progress(1.0, f"Processing complete{gpu_info}")
-        
-        # Return results
-        return output_image, f"Image processing completed successfully.{gpu_info}"
+        return output_image_path, "Image processing completed successfully."
         
     except Exception as e:
-        # Print the full traceback for debugging
         import traceback
         trace = traceback.format_exc()
         print(f"Error during processing: {str(e)}")
@@ -655,342 +763,470 @@ def image_process(image_path, task_name, tile_size, tile_overlap, use_custom_mod
         return None, f"Error during processing: {str(e)}"
     
     finally:
-        # Cleanup temporary files
-        try:
-            shutil.rmtree(temp_dir)
-        except:
-            pass
+        # We'll leave cleanup for later to enable debugging
+        pass
 
-def get_model_details(task_name):
-    """Return details about the selected model"""
-    if task_name not in SUPPORTED_TASKS:
-        return "Task not found"
-    
-    task_info = SUPPORTED_TASKS[task_name]
-    info = f"""
-    # {task_name}
-    
-    **Model Path**: {task_info['model_path']}
-    **Config File**: {task_info['config_file']}
-    **Model Type**: {task_info['model_type']}
-    
-    ## Processing Settings
-    - **Tile Size**: Larger values need more memory but may improve quality
-    - **Tile Overlap**: Higher values reduce seam artifacts between tiles
-    - **Output Format**: MP4 is more compatible, WebM has better compression
-    
-    ## Custom Model (Advanced)
-    If you have your own trained Turtle model, you can specify custom paths.
-    """
-    return info
+def cancel_processing(job_id):
+    """Cancel active processing job"""
+    if job_id in active_processes:
+        print(f"Attempting to cancel job {job_id}")
+        result = stop_thread(job_id)
+        if result:
+            return f"Processing job {job_id} has been canceled."
+        else:
+            return f"Failed to cancel job {job_id}"
+    else:
+        return f"No active job found with ID {job_id}"
 
-def create_turtle_gui():
-    """Create and configure the Gradio interface with improved UI"""
-    
-    # Custom CSS for better accessibility
-    custom_css = """
-    /* High contrast theme */
-    .primary-btn { background-color: #0056b3; color: white; }
-    .stop-btn { background-color: #dc3545; color: white; }
-    /* Focus indicators */
-    :focus { outline: 3px solid #0056b3; }
-    /* Larger text */
-    .label { font-size: 16px; font-weight: bold; }
+def create_ui():
+    """Create the Gradio UI"""
+    # Set page title and theme
+    title = "Turtle 🐢: Unified Video Restoration"
+    description = """A unified video restoration model for deblurring, deraining, desnowing and more!
+    <br>For more details and source code, check the <a href='https://github.com/CVMI-Lab/Turtle'>GitHub repository</a>.
     """
     
-    with gr.Blocks(title="Turtle Video Restoration", css=custom_css) as app:
-        gr.Markdown("""
-        <div role="banner">
-            <h1 id="mainHeading">🐢 Turtle Video Restoration</h1>
-            <p role="doc-subtitle">Restore videos with state-of-the-art AI models</p>
-        </div>
+    # Define CSS for better UI layout
+    css = """
+    #title { 
+        text-align: center; 
+        font-size: 2.5rem !important; 
+        font-weight: bold;
+        margin-bottom: 0.5rem !important;
+    }
+    #subtitle {
+        text-align: center;
+        font-size: 1.2rem !important;
+        margin-bottom: 2rem !important;
+    }
+    .tag {
+        display: inline-block;
+        padding: 4px 8px;
+        background-color: #f3f4f6;
+        border-radius: 4px;
+        margin-right: 8px;
+        font-size: 0.9rem;
+        color: #4b5563;
+    }
+    .video-output-box {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 10px;
+        background-color: #f9fafb;
+    }
+    .button-row {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-start;
+        margin-top: 10px;
+    }
+    .output-container {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+    }
+    .control-panel {
+        padding: 15px;
+        border-radius: 8px;
+        background-color: #f3f4f6;
+        margin-bottom: 20px;
+    }
+    .collapse-button {
+        width: 100%;
+        text-align: left;
+        background-color: #e5e7eb;
+        border: none;
+        padding: 10px;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+    .vertical-video {
+        max-height: 80vh;
+        margin: 0 auto;
+    }
+    """
+    
+    with gr.Blocks(css=css, title=title) as app:
+        # Store active job ID
+        current_job_id = gr.State(value=None)
         
-        This is a web interface for the Turtle model, a state-of-the-art model for video restoration tasks such as super-resolution, deblurring, deraining, and more.
-            
-## Instructions
-1. Select the task you want to perform
-2. Upload a video or image
-3. Adjust processing settings if needed
-4. Click 'Process' to start restoration
-5. View and download the results
-            
-For more information, see [the Turtle GitHub repository](https://github.com/kjanjua26/Turtle).
-        """)
-        
-        # Add keyboard shortcuts via JS
-        app.load(None, None, None, js="""
-            function setup_shortcuts() {
-                document.addEventListener('keydown', (e) => {
-                    // Ctrl+Enter to process
-                    if(e.ctrlKey && e.key === 'Enter') {
-                        document.querySelector('button.primary-btn').click();
-                    }
-                    // Escape to cancel
-                    if(e.key === 'Escape') {
-                        document.querySelector('button.stop-btn').click();
-                    }
-                });
-            }
-            if (document.readyState === 'complete') {
-                setup_shortcuts();
-            } else {
-                window.addEventListener('load', setup_shortcuts);
-            }
-        """)
+        gr.HTML(f"<h1 id='title'>Turtle 🐢</h1>")
+        gr.HTML(f"<p id='subtitle'>Unified Video Restoration</p>")
         
         with gr.Tabs():
             with gr.TabItem("Video Processing"):
                 with gr.Row():
                     with gr.Column(scale=1):
-                        task_selector = gr.Dropdown(
+                        # Input section
+                        input_video = gr.Video(label="Input Video", type="filepath")
+                        task = gr.Dropdown(
                             choices=list(SUPPORTED_TASKS.keys()),
-                            label="Select Restoration Task",
-                            value=list(SUPPORTED_TASKS.keys())[0]
+                            value="Video Super-Resolution",
+                            label="Restoration Task"
                         )
                         
-                        video_input = gr.Video(label="Upload Video")
-                        validation_msg = gr.Textbox(label="Validation", interactive=False)
-                        
-                        with gr.Accordion("Processing Settings", open=True):
-                            model_info = gr.Markdown("Select a task to view model details")
+                        # Control panel section (moved to top)
+                        with gr.Group(elem_classes="control-panel"):
+                            with gr.Row():
+                                # Process and Cancel buttons at the top
+                                with gr.Column(scale=1):
+                                    process_button = gr.Button("Process Video", variant="primary", interactive=True)
+                                with gr.Column(scale=1):
+                                    cancel_button = gr.Button("Cancel Processing", variant="stop", interactive=False)
                             
-                            # Structured controls instead of free-form text
-                            tile_size = gr.Slider(
-                                minimum=64, maximum=640, value=320, step=64, 
-                                label="Tile Size (larger needs more memory)"
-                            )
+                            # Add a divider
+                            gr.Markdown("---")
                             
-                            tile_overlap = gr.Slider(
-                                minimum=16, maximum=256, value=128, step=16, 
-                                label="Tile Overlap"
-                            )
+                            # Basic settings section
+                            with gr.Accordion("Basic Settings", open=True):
+                                with gr.Row():
+                                    with gr.Column(scale=1):
+                                        tile_size = gr.Slider(
+                                            minimum=32, maximum=512, value=128, step=32,
+                                            label="Tile Size",
+                                            info="Larger values use more memory but may provide better quality"
+                                        )
+                                    with gr.Column(scale=1):
+                                        tile_overlap = gr.Slider(
+                                            minimum=0, maximum=64, value=4, step=4,
+                                            label="Tile Overlap",
+                                            info="Higher overlap can reduce tiling artifacts"
+                                        )
+                                with gr.Row():
+                                    with gr.Column(scale=1):
+                                        sample_rate = gr.Slider(
+                                            minimum=0.1, maximum=1.0, value=1.0, step=0.1,
+                                            label="Frame Sample Rate",
+                                            info="Lower values process fewer frames (faster but may reduce temporal consistency)"
+                                        )
+                                    with gr.Column(scale=1):
+                                        output_format = gr.Dropdown(
+                                            choices=["MP4", "WebM"],
+                                            value="MP4",
+                                            label="Output Format"
+                                        )
                             
-                            output_format = gr.Radio(
-                                choices=["MP4", "WebM"], value="MP4", 
-                                label="Output Format"
-                            )
-                            
-                            # Custom model options
-                            use_custom_model = gr.Checkbox(
-                                label="Use custom model (advanced)", 
-                                value=False
-                            )
-                            
-                            with gr.Group(visible=False) as custom_model_group:
-                                custom_model_path = gr.Textbox(
-                                    label="Custom Model Path",
-                                    placeholder="Path to your custom model .pth file"
+                            # Advanced Settings (collapsed by default)
+                            with gr.Accordion("Advanced Settings", open=False):
+                                with gr.Row():
+                                    with gr.Column(scale=1):
+                                        noise_level = gr.Slider(
+                                            minimum=0, maximum=255, value=50, step=5,
+                                            label="Noise Level",
+                                            info="Only applies to denoising tasks (higher = more noise removal)"
+                                        )
+                                    with gr.Column(scale=1):
+                                        denoising_strength = gr.Slider(
+                                            minimum=0.0, maximum=1.0, value=0.5, step=0.1,
+                                            label="Denoising Strength",
+                                            info="Strength of denoising effect"
+                                        )
+                                
+                                # Additional advanced parameters as free text
+                                advanced_params = gr.Textbox(
+                                    label="Additional Parameters",
+                                    placeholder="Enter as key=value pairs, one per line or comma-separated",
+                                    lines=2
                                 )
-                                custom_config_path = gr.Textbox(
-                                    label="Custom Config File Path",
-                                    placeholder="Path to your custom config .yml file"
+                                
+                                # Custom model section
+                                use_custom_model = gr.Checkbox(
+                                    label="Use Custom Model",
+                                    value=False
                                 )
-                            
-                            # Show/hide custom model inputs
-                            use_custom_model.change(
-                                lambda x: {"visible": x}, 
-                                inputs=[use_custom_model], 
-                                outputs=[custom_model_group]
-                            )
+                                with gr.Group(visible=False) as custom_model_group:
+                                    custom_model_path = gr.Textbox(
+                                        label="Custom Model Path",
+                                        placeholder="Path to custom model file (.pth)"
+                                    )
+                                    custom_config_path = gr.Textbox(
+                                        label="Custom Config Path",
+                                        placeholder="Path to custom config file (.yml)"
+                                    )
+                                
+                                # Make custom model section visible when checkbox is checked
+                                use_custom_model.change(
+                                    fn=lambda x: gr.Group(visible=x),
+                                    inputs=[use_custom_model],
+                                    outputs=[custom_model_group]
+                                )
                         
-                        with gr.Row():
-                            process_btn = gr.Button("Process Video", variant="primary", elem_classes="primary-btn")
-                            cancel_btn = gr.Button("Cancel", variant="stop", elem_classes="stop-btn")
-                            
+                        # Status output
+                        status_output = gr.Textbox(
+                            label="Status",
+                            placeholder="Upload a video and select processing options...",
+                            interactive=False
+                        )
+                        
+                    # Output section
                     with gr.Column(scale=1):
-                        with gr.Tabs():
-                            with gr.TabItem("Restored Video"):
-                                video_output = gr.Video(label="Restored Video")
-                                download_restored_btn = gr.Button("Download Restored Video")
-                                
-                            with gr.TabItem("Comparison (Slider)"):
-                                comparison_output = gr.Video(label="Original vs Restored")
-                                download_comparison_btn = gr.Button("Download Comparison")
-                                
-                        status_text = gr.Textbox(label="Status", lines=2)
+                        result_video = gr.Video(label="Result Video", interactive=False, elem_classes="vertical-video")
+                        comparison_video = gr.Video(label="Side-by-Side Comparison", interactive=False, elem_classes="vertical-video")
                 
-                # Connect components with callbacks
-                task_selector.change(
-                    get_model_details, 
-                    inputs=[task_selector], 
-                    outputs=[model_info]
-                )
+                # Define processing function with job ID tracking
+                def start_processing(video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
+                                    denoising_strength, advanced_settings, output_format, use_custom_model,
+                                    custom_model_path, custom_config_path):
+                    # Generate a new job ID
+                    job_id = generate_random_id()
+                    
+                    # Create a new thread for processing
+                    thread = threading.Thread(
+                        target=process_video_thread,
+                        args=(job_id, video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level,
+                              denoising_strength, advanced_settings, output_format, use_custom_model,
+                              custom_model_path, custom_config_path)
+                    )
+                    
+                    # Store the thread in active processes
+                    active_processes[job_id] = thread
+                    
+                    # Start the thread
+                    thread.start()
+                    
+                    # Return the job ID and initial status
+                    return job_id, None, None, "Processing started. Please wait..."
+                
+                # Define validation function
+                def validate_and_update(video_path):
+                    if video_path is None:
+                        return "Please upload a video to process.", True
+                    
+                    valid, message = validate_video(video_path)
+                    return message, valid
                 
                 # Validate video when uploaded
-                video_input.change(
-                    validate_video,
-                    inputs=[video_input],
-                    outputs=[validation_msg]
+                input_video.upload(
+                    fn=validate_and_update,
+                    inputs=[input_video],
+                    outputs=[status_output, process_button]
                 )
                 
-                process_btn.click(
-                    process_video, 
+                # Process button click event
+                process_button.click(
+                    fn=start_processing,
                     inputs=[
-                        video_input, task_selector, tile_size, tile_overlap, 
-                        output_format, use_custom_model, custom_model_path, 
-                        custom_config_path
+                        input_video, task, tile_size, tile_overlap, sample_rate, noise_level,
+                        denoising_strength, advanced_params, output_format, use_custom_model,
+                        custom_model_path, custom_config_path
                     ],
-                    outputs=[video_output, comparison_output, status_text]
+                    outputs=[current_job_id, result_video, comparison_video, status_output],
+                    show_progress=True
+                ).then(
+                    fn=lambda: (False, True),
+                    inputs=None,
+                    outputs=[process_button, cancel_button]
                 )
                 
-                # Download functionality
-                download_restored_btn.click(
-                    lambda x: x if x else None,
-                    inputs=[video_output],
-                    outputs=[gr.File(label="Download")]
+                # Cancel button click event
+                def cancel_current_job(job_id):
+                    if job_id:
+                        result = cancel_processing(job_id)
+                        return None, result, True, False
+                    return None, "No active job to cancel", True, False
+                
+                cancel_button.click(
+                    fn=cancel_current_job,
+                    inputs=[current_job_id],
+                    outputs=[current_job_id, status_output, process_button, cancel_button]
                 )
                 
-                download_comparison_btn.click(
-                    lambda x: x if x else None,
-                    inputs=[comparison_output],
-                    outputs=[gr.File(label="Download")]
-                )
+                # Create polling function to check job status
+                def check_job_status(job_id):
+                    if job_id is None:
+                        return None, None, "No active job", True, False
+                    
+                    if job_id in active_processes:
+                        return None, None, "Processing in progress...", False, True
+                    
+                    # Job is complete, check for results
+                    result_video_path = os.path.join(tempfile.gettempdir(), f"output_{job_id}.mp4")
+                    comparison_video_path = os.path.join(tempfile.gettempdir(), f"comparison_{job_id}.mp4")
+                    
+                    result_exists = os.path.exists(result_video_path)
+                    comparison_exists = os.path.exists(comparison_video_path)
+                    
+                    if result_exists or comparison_exists:
+                        result_to_return = result_video_path if result_exists else None
+                        comparison_to_return = comparison_video_path if comparison_exists else None
+                        return result_to_return, comparison_to_return, "Processing completed!", True, False
+                    
+                    return None, None, "Processing completed but no output found", True, False
                 
+                # Add poll event
+                gr.HTML('<script>window.job_check_interval = setInterval(() => {if(window.poller_obj) window.poller_obj.click();}, 5000);</script>')
+                poller = gr.Button(visible=False, elem_id="poller")
+                poller.click(
+                    fn=check_job_status,
+                    inputs=[current_job_id],
+                    outputs=[result_video, comparison_video, status_output, process_button, cancel_button]
+                )
+            
+            # Image Processing Tab
             with gr.TabItem("Image Processing"):
                 with gr.Row():
                     with gr.Column(scale=1):
-                        img_task_selector = gr.Dropdown(
+                        # Input section
+                        input_image = gr.Image(label="Input Image", type="filepath")
+                        image_task = gr.Dropdown(
                             choices=list(SUPPORTED_TASKS.keys()),
-                            label="Select Restoration Task",
-                            value=list(SUPPORTED_TASKS.keys())[0]
+                            value="Video Super-Resolution",
+                            label="Restoration Task"
                         )
                         
-                        image_input = gr.Image(type="filepath", label="Upload Image")
-                        img_validation_msg = gr.Textbox(label="Validation", interactive=False)
-                        
-                        with gr.Accordion("Processing Settings", open=True):
-                            img_model_info = gr.Markdown("Select a task to view model details")
+                        # Control panel for image processing
+                        with gr.Group(elem_classes="control-panel"):
+                            # Process button
+                            process_image_button = gr.Button("Process Image", variant="primary", interactive=True)
                             
-                            # Structured controls for image processing
-                            img_tile_size = gr.Slider(
-                                minimum=64, maximum=640, value=320, step=64, 
-                                label="Tile Size (larger needs more memory)"
-                            )
+                            # Basic settings
+                            with gr.Accordion("Settings", open=True):
+                                with gr.Row():
+                                    with gr.Column(scale=1):
+                                        image_tile_size = gr.Slider(
+                                            minimum=32, maximum=512, value=128, step=32,
+                                            label="Tile Size",
+                                            info="Larger values use more memory but may provide better quality"
+                                        )
+                                    with gr.Column(scale=1):
+                                        image_tile_overlap = gr.Slider(
+                                            minimum=0, maximum=64, value=4, step=4,
+                                            label="Tile Overlap",
+                                            info="Higher overlap can reduce tiling artifacts"
+                                        )
                             
-                            img_tile_overlap = gr.Slider(
-                                minimum=16, maximum=256, value=128, step=16, 
-                                label="Tile Overlap"
-                            )
-                            
-                            # Custom model options for image processing
-                            img_use_custom_model = gr.Checkbox(
-                                label="Use custom model (advanced)", 
-                                value=False
-                            )
-                            
-                            with gr.Group(visible=False) as img_custom_model_group:
-                                img_custom_model_path = gr.Textbox(
-                                    label="Custom Model Path",
-                                    placeholder="Path to your custom model .pth file"
+                            # Advanced image settings
+                            with gr.Accordion("Advanced Settings", open=False):
+                                with gr.Row():
+                                    with gr.Column(scale=1):
+                                        image_noise_level = gr.Slider(
+                                            minimum=0, maximum=255, value=50, step=5,
+                                            label="Noise Level",
+                                            info="Only applies to denoising tasks"
+                                        )
+                                    with gr.Column(scale=1):
+                                        image_denoising_strength = gr.Slider(
+                                            minimum=0.0, maximum=1.0, value=0.5, step=0.1,
+                                            label="Denoising Strength",
+                                            info="Strength of denoising effect"
+                                        )
+                                
+                                # Additional advanced parameters
+                                image_advanced_params = gr.Textbox(
+                                    label="Additional Parameters",
+                                    placeholder="Enter as key=value pairs, one per line or comma-separated",
+                                    lines=2
                                 )
-                                img_custom_config_path = gr.Textbox(
-                                    label="Custom Config File Path",
-                                    placeholder="Path to your custom config .yml file"
+                                
+                                # Custom model for image processing
+                                image_use_custom_model = gr.Checkbox(
+                                    label="Use Custom Model",
+                                    value=False
                                 )
-                            
-                            # Show/hide custom model inputs
-                            img_use_custom_model.change(
-                                lambda x: {"visible": x}, 
-                                inputs=[img_use_custom_model], 
-                                outputs=[img_custom_model_group]
-                            )
+                                with gr.Group(visible=False) as image_custom_model_group:
+                                    image_custom_model_path = gr.Textbox(
+                                        label="Custom Model Path",
+                                        placeholder="Path to custom model file (.pth)"
+                                    )
+                                    image_custom_config_path = gr.Textbox(
+                                        label="Custom Config Path",
+                                        placeholder="Path to custom config file (.yml)"
+                                    )
+                                
+                                # Make custom model section visible when checkbox is checked
+                                image_use_custom_model.change(
+                                    fn=lambda x: gr.Group(visible=x),
+                                    inputs=[image_use_custom_model],
+                                    outputs=[image_custom_model_group]
+                                )
                         
-                        with gr.Row():
-                            img_process_btn = gr.Button("Process Image", variant="primary", elem_classes="primary-btn")
-                            img_cancel_btn = gr.Button("Cancel", variant="stop", elem_classes="stop-btn")
-                            
+                        # Image status output
+                        image_status_output = gr.Textbox(
+                            label="Status",
+                            placeholder="Upload an image and select processing options...",
+                            interactive=False
+                        )
+                        
+                    # Output section for image
                     with gr.Column(scale=1):
+                        result_image = gr.Image(label="Processed Image", interactive=False)
                         with gr.Row():
-                            image_output = gr.Image(label="Restored Image")
-                            
-                        img_status_text = gr.Textbox(label="Status", lines=2)
-                        download_img_btn = gr.Button("Download Restored Image")
+                            with gr.Column(scale=1):
+                                gr.Markdown("### Before")
+                                input_image_display = gr.Image(label="", interactive=False)
+                            with gr.Column(scale=1):
+                                gr.Markdown("### After")
+                                output_image_display = gr.Image(label="", interactive=False)
                 
-                # Connect components with callbacks
-                img_task_selector.change(
-                    get_model_details, 
-                    inputs=[img_task_selector], 
-                    outputs=[img_model_info]
+                # Process image button click event
+                process_image_button.click(
+                    fn=image_process,
+                    inputs=[
+                        input_image, image_task, image_tile_size, image_tile_overlap,
+                        image_noise_level, image_denoising_strength, image_advanced_params,
+                        image_use_custom_model, image_custom_model_path, image_custom_config_path
+                    ],
+                    outputs=[result_image, image_status_output],
+                    show_progress=True
+                ).then(
+                    fn=lambda img: (img, img),
+                    inputs=[input_image],
+                    outputs=[input_image_display, output_image_display]
                 )
                 
                 # Validate image when uploaded
-                image_input.change(
-                    validate_image,
-                    inputs=[image_input],
-                    outputs=[img_validation_msg]
-                )
+                def validate_image_and_update(image_path):
+                    if image_path is None:
+                        return "Please upload an image to process.", True
+                    
+                    valid, message = validate_image(image_path)
+                    return message, valid
                 
-                img_process_btn.click(
-                    image_process, 
-                    inputs=[
-                        image_input, img_task_selector, img_tile_size, 
-                        img_tile_overlap, img_use_custom_model, 
-                        img_custom_model_path, img_custom_config_path
-                    ],
-                    outputs=[image_output, img_status_text]
+                input_image.upload(
+                    fn=validate_image_and_update,
+                    inputs=[input_image],
+                    outputs=[image_status_output, process_image_button]
                 )
-                
-                # Enable download of processed image
-                download_img_btn.click(
-                    lambda x: x if x else None,
-                    inputs=[image_output],
-                    outputs=[gr.File(label="Download Processed Image")]
-                )
-                
-            with gr.TabItem("Help & About"):
+            
+            # About tab
+            with gr.TabItem("About"):
                 gr.Markdown("""
-                # Help & About
+                # About Turtle 🐢
                 
-                ## About Turtle
+                **Turtle** is a unified video restoration model for multiple low-level vision tasks:
                 
-                Turtle is a state-of-the-art model for video restoration tasks. It was developed by researchers at Huawei and presented in the paper "Learning Truncated Causal History Model for Video Restoration" accepted at NeurIPS 2024.
+                * Video Super-Resolution
+                * Video Deblurring
+                * Video Deraining
+                * Rain Drop Removal
+                * Video Desnowing
+                * Video Denoising
                 
-                ## Supported Tasks
+                ## Paper
                 
-                - **Video Super-Resolution**: Enhances the resolution of low-resolution videos
-                - **Video Deblurring**: Removes blur from videos
-                - **Video Deraining**: Removes rain streaks from videos
-                - **Rain Drop Removal**: Removes rain drops from videos
-                - **Video Desnowing**: Removes snow from videos
-                - **Video Denoising**: Removes noise from videos
-                
-                ## Processing Settings
-                
-                - **Tile Size**: Size of tiles for processing (64-640 pixels)
-                  - Larger values produce better results but require more GPU memory
-                  - If you experience out-of-memory errors, try reducing this value
-                
-                - **Tile Overlap**: Overlap between adjacent tiles (16-256 pixels)
-                  - Higher values reduce visible seams at tile boundaries
-                  - Values around 1/3 of tile size typically work well
-                
-                - **Output Format**: Choose between MP4 (more compatible) and WebM (better compression)
-                
-                ## Keyboard Shortcuts
-                
-                - **Ctrl+Enter**: Start processing
-                - **Escape**: Cancel processing
-                
-                ## Troubleshooting
-                
-                - **Out of memory errors**: Try reducing the tile size
-                - **Slow processing**: For faster results, use smaller videos or lower resolutions
-                - **Poor results at tile boundaries**: Increase the tile overlap
-                - **Model not found**: Ensure the model paths are correct if using custom models
+                [Unified Video Restoration via Recurrent Propagation](https://arxiv.org/abs/2312.02984)
                 
                 ## Citation
                 
                 ```
-                @inproceedings{ghasemabadilearning,
-                  title={Learning Truncated Causal History Model for Video Restoration},
-                  author={Ghasemabadi, Amirhosein and Janjua, Muhammad Kamran and Salameh, Mohammad and Niu, Di},
-                  booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems}
+                @inproceedings{fan2024turtle,
+                    title={Unified Video Restoration via Recurrent Propagation},
+                    author={Fan, Xuanchen and Dong, Ruoyu and Qi, Mingdeng and Zhang, Xinyuan and Zuo, Wangmeng and Lin, Xiao and Li, Rui and Zhang, Lei},
+                    booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+                    year={2024}
                 }
                 ```
+                
+                ## GitHub Repository
+                
+                [CVMI-Lab/Turtle](https://github.com/CVMI-Lab/Turtle)
                 """)
+        
+        # Run pending JS for polling 
+        gr.HTML('<script>document.getElementById("poller").id = "poller_obj";</script>')
     
     return app
 
 if __name__ == "__main__":
-    app = create_turtle_gui()
-    app.launch(share=True, debug=True)
+    app = create_ui()
+    app.queue().launch(share=False)
