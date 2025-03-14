@@ -197,12 +197,19 @@ def run_inference(video_name, test_loader,
     k_cache, v_cache = None, None
     total_frames = len(test_loader.dataset)
     
+    # Calculate the number of digits needed for frame numbering
+    # Use log10(n) + 1 to get the number of digits in n
+    # Add 1 to handle edge cases and ensure we have enough digits
+    num_digits = max(4, int(math.log10(total_frames)) + 2)
+    
     # Ensure the directory for the model exists
     base_path = image_out_path
     base_path = os.path.join(base_path, model_name)
     os.makedirs(base_path, exist_ok=True)
     base_path = os.path.join(base_path, video_name)
     os.makedirs(base_path, exist_ok=True)
+    
+    print(f"Processing {total_frames} frames with {num_digits} digits padding")
     
     for ix in range(total_frames):
         # Update progress based on frame index
@@ -232,11 +239,11 @@ def run_inference(video_name, test_loader,
             # superresolution
             if model_type == "SR":
                 previous_frame_resized = torch.nn.functional.interpolate(previous_frame.unsqueeze(0), 
-                                                                scale_factor=1/4,
-                                                                mode="bicubic")
+                                                               scale_factor=1/4,
+                                                               mode="bicubic")
                 current_frame_resized = torch.nn.functional.interpolate(current_frame.unsqueeze(0), 
-                                                                scale_factor=1/4, 
-                                                                mode="bicubic")
+                                                               scale_factor=1/4, 
+                                                               mode="bicubic")
                 x = torch.concat((previous_frame_resized, 
                                 current_frame_resized), dim=0).to(device)
             else:
@@ -250,9 +257,10 @@ def run_inference(video_name, test_loader,
         x2 = x2[:, :h, :w]
         
         if save_img:
-            # Save input and output images with consistent frame numbers
-            file_name_inp = os.path.join(base_path, f"Frame_{ix+1:04d}_Input.png")
-            file_name_pred = os.path.join(base_path, f"Frame_{ix+1:04d}_Pred.png")
+            # Save input and output images with consistent frame numbers using dynamic padding
+            frame_num = ix + 1  # 1-indexed frame numbers
+            file_name_inp = os.path.join(base_path, f"Frame_{frame_num:0{num_digits}d}_Input.png")
+            file_name_pred = os.path.join(base_path, f"Frame_{frame_num:0{num_digits}d}_Pred.png")
             
             # Convert tensor to numpy for OpenCV
             current_np = (current_frame.permute(1, 2, 0).detach().cpu().numpy()*255).astype(np.uint8)
@@ -261,18 +269,6 @@ def run_inference(video_name, test_loader,
             # Save with consistent naming pattern
             cv2.imwrite(file_name_pred, cv2.cvtColor(x2_np, cv2.COLOR_RGB2BGR))
             cv2.imwrite(file_name_inp, cv2.cvtColor(current_np, cv2.COLOR_RGB2BGR))
-            
-            # Optionally save the side-by-side comparison
-            if False:  # Set to True if you want side-by-side images
-                fig, axs = plt.subplots(1, 2, figsize=(10,10))
-                axs[0].imshow(current_frame.permute(1, 2, 0).detach().cpu().numpy())
-                axs[1].imshow(x2.permute(1, 2, 0).detach().cpu().numpy())
-                axs[0].set_title('Input')
-                axs[1].set_title('Pred')
-                plt.tight_layout()
-                save_path = os.path.join(base_path, f"Frame_{ix+1:04d}_Compare.png")
-                plt.savefig(save_path, bbox_inches='tight')
-                plt.close()
 
         # Use current frame as the previous frame for next iteration
         previous_frame = current_frame
