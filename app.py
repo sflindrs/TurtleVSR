@@ -800,98 +800,90 @@ def create_ui():
     
     # Updated CSS to support dark theme and improve interactions
     css = """
-    :root {
+    .dark {
         --background-primary: #1f2937;
         --background-secondary: #111827;
         --text-primary: #f9fafb;
         --border-color: #374151;
-        --input-background: #374151;
+        --input-background: #2c3e50;
         --input-text: #f9fafb;
-    }
-
-    .dark, [data-theme='dark'] {
-        background-color: var(--background-primary) !important;
-        color: var(--text-primary) !important;
+        --accent-color: #3b82f6;
     }
 
     .gradio-container {
         background-color: var(--background-primary) !important;
     }
 
-    #title { 
-        text-align: center; 
-        font-size: 2.5rem !important; 
-        font-weight: bold;
-        margin-bottom: 0.5rem !important;
-        color: var(--text-primary) !important;
-    }
-
-    .video-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        max-height: 70vh;
-        overflow: auto;
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        padding: 10px;
-        background-color: var(--background-secondary) !important;
-    }
-
-    .top-controls {
-        display: flex;
-        gap: 10px;
-        margin-bottom: 15px;
-        padding: 10px;
-        background-color: var(--background-secondary) !important;
-        border-radius: 5px;
-        position: sticky;
-        top: 0;
-        z-index: 100;
-    }
-
-    /* Ensure inputs and buttons have proper styling */
-    .gradio-container input, 
-    .gradio-container select, 
-    .gradio-container textarea, 
-    .gradio-container button {
+    /* Ensure proper styling for interactive elements */
+    .gradio-container .gradio-slider,
+    .gradio-container .gradio-dropdown,
+    .gradio-container .gradio-number,
+    .gradio-container .gradio-textbox {
         background-color: var(--input-background) !important;
         color: var(--input-text) !important;
         border-color: var(--border-color) !important;
     }
 
-    /* Improve interaction states */
-    .gradio-container input:focus, 
-    .gradio-container select:focus, 
-    .gradio-container textarea:focus {
-        border-color: #4f46e5 !important;
-        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.2) !important;
+    /* Slider track and thumb styling */
+    .gradio-container .gradio-slider .track {
+        background-color: var(--border-color) !important;
     }
 
-    /* Tabs styling */
-    .tabitem {
+    .gradio-container .gradio-slider .thumb {
+        background-color: var(--accent-color) !important;
+        border-color: var(--accent-color) !important;
+    }
+
+    /* Hover and focus states */
+    .gradio-container .gradio-slider:hover .thumb,
+    .gradio-container .gradio-slider:focus .thumb {
+        background-color: var(--accent-color) !important;
+        opacity: 0.8;
+    }
+
+    /* Tabs and accordion */
+    .gradio-tabs .tabitem {
         background-color: var(--background-primary) !important;
         color: var(--text-primary) !important;
     }
 
-    /* Accordion styling */
-    .accordionitem {
+    .gradio-accordion .label-wrap {
         background-color: var(--background-secondary) !important;
         color: var(--text-primary) !important;
-        border-color: var(--border-color) !important;
     }
 
-    /* Ensure sliders and dropdowns are visible */
-    .gradio-container .slider, 
-    .gradio-container .dropdown {
-        background-color: var(--input-background) !important;
-        color: var(--input-text) !important;
+    .gradio-accordion .content {
+        background-color: var(--background-secondary) !important;
+        color: var(--text-primary) !important;
     }
 
-    /* Fix for video and image components */
-    .gradio-video, .gradio-image {
+    /* Video and image containers */
+    .video-container {
         background-color: var(--background-secondary) !important;
         border-color: var(--border-color) !important;
+        color: var(--text-primary) !important;
+    }
+
+    /* Button styling */
+    .gradio-button {
+        background-color: var(--accent-color) !important;
+        color: white !important;
+        border: none !important;
+    }
+
+    .gradio-button:hover {
+        opacity: 0.9 !important;
+    }
+
+    /* Ensure text visibility */
+    .gradio-container {
+        color: var(--text-primary) !important;
+    }
+
+    /* Title styling */
+    #title {
+        color: var(--text-primary) !important;
+        text-align: center;
     }
     """
     
@@ -1042,6 +1034,8 @@ def create_ui():
                         with gr.Column(elem_classes="video-container"):
                             gr.Markdown("### Side-by-Side Comparison")
                             comparison_video = gr.Video(label="")
+                
+                # Rest of the code remains the same as in the previous implementation...
 
     return app
 
