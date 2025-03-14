@@ -67,13 +67,27 @@ def create_side_by_side_video(input_frames_dir, output_frames_dir, output_video_
     """
     Create a side-by-side comparison video
     """
-    # Get a sample frame to determine dimensions
+    # Get all input and output frames
     input_frames = sorted([f for f in os.listdir(input_frames_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
-    output_frames = sorted([f for f in os.listdir(output_frames_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
+    output_frames = sorted([f for f in os.listdir(output_frames_dir) if 'Pred' in f and f.endswith('.png')])
     
     if not input_frames or not output_frames:
         return "Error: No frames found"
     
+    # Map output frames to their frame numbers
+    output_frame_map = {}
+    for output_frame in output_frames:
+        # Extract frame number from names like "Frame_1_Pred.png"
+        if '_' in output_frame:
+            parts = output_frame.split('_')
+            if len(parts) >= 2 and parts[0] == "Frame":
+                try:
+                    frame_num = int(parts[1])
+                    output_frame_map[frame_num] = output_frame
+                except ValueError:
+                    continue
+    
+    # Get dimensions from first input frame
     input_frame_path = os.path.join(input_frames_dir, input_frames[0])
     frame = cv2.imread(input_frame_path)
     h, w, _ = frame.shape
@@ -83,15 +97,23 @@ def create_side_by_side_video(input_frames_dir, output_frames_dir, output_video_
     video_writer = cv2.VideoWriter(output_video_path, fourcc, fps, (w*2, h))
     
     # Create side-by-side comparisons
-    for i in range(min(len(input_frames), len(output_frames))):
-        input_frame = cv2.imread(os.path.join(input_frames_dir, input_frames[i]))
-        output_frame = cv2.imread(os.path.join(output_frames_dir, output_frames[i]))
+    for i, input_frame in enumerate(input_frames):
+        frame_num = i + 1
+        input_img = cv2.imread(os.path.join(input_frames_dir, input_frame))
+        
+        # Find matching output frame
+        if frame_num in output_frame_map:
+            output_frame = output_frame_map[frame_num]
+            output_img = cv2.imread(os.path.join(output_frames_dir, output_frame))
+        else:
+            # If no matching output frame, use a blank frame
+            output_img = np.zeros_like(input_img)
         
         # Make sure the frames are the same size
-        if output_frame.shape[:2] != input_frame.shape[:2]:
-            output_frame = cv2.resize(output_frame, (input_frame.shape[1], input_frame.shape[0]))
+        if output_img.shape[:2] != input_img.shape[:2]:
+            output_img = cv2.resize(output_img, (input_img.shape[1], input_img.shape[0]))
         
-        combined = np.hstack((input_frame, output_frame))
+        combined = np.hstack((input_img, output_img))
         video_writer.write(combined)
     
     video_writer.release()
@@ -103,7 +125,7 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
     """
     # Get a sample frame to determine dimensions
     input_frames = sorted([f for f in os.listdir(input_frames_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
-    output_frames = sorted([f for f in os.listdir(output_frames_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
+    output_frames = sorted([f for f in os.listdir(output_frames_dir) if f.endswith('.png') and 'Pred' in f])
     
     if not input_frames or not output_frames:
         return "Error: No frames found"
@@ -118,20 +140,44 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
     
     total_frames = min(len(input_frames), len(output_frames))
     
-    for i in range(total_frames):
+    # Map between frame numbers in input and output
+    frame_map = {}
+    for output_frame in output_frames:
+        # Extract frame number from names like "Frame_1_Pred.png"
+        if '_' in output_frame:
+            parts = output_frame.split('_')
+            if len(parts) >= 2 and parts[0] == "Frame":
+                try:
+                    frame_num = int(parts[1])
+                    frame_map[frame_num] = output_frame
+                except ValueError:
+                    continue
+    
+    for i, input_frame in enumerate(input_frames[:total_frames]):
+        # Get corresponding frame number (i+1 because frames are usually 1-indexed)
+        frame_num = i + 1
+        
         # Calculate slider position based on frame index
         slider_position = int((i / total_frames) * w)
         
-        input_frame = cv2.imread(os.path.join(input_frames_dir, input_frames[i]))
-        output_frame = cv2.imread(os.path.join(output_frames_dir, output_frames[i]))
+        # Read input frame
+        input_img = cv2.imread(os.path.join(input_frames_dir, input_frame))
+        
+        # Find corresponding output frame
+        if frame_num in frame_map:
+            output_frame = frame_map[frame_num]
+            output_img = cv2.imread(os.path.join(output_frames_dir, output_frame))
+        else:
+            # If we don't have a matching output frame, use the input frame
+            output_img = input_img.copy()
         
         # Make sure the frames are the same size
-        if output_frame.shape[:2] != input_frame.shape[:2]:
-            output_frame = cv2.resize(output_frame, (input_frame.shape[1], input_frame.shape[0]))
+        if output_img.shape[:2] != input_img.shape[:2]:
+            output_img = cv2.resize(output_img, (input_img.shape[1], input_img.shape[0]))
         
         # Create combined frame with sliding comparison
-        combined_frame = input_frame.copy()
-        combined_frame[:, :slider_position] = output_frame[:, :slider_position]
+        combined_frame = input_img.copy()
+        combined_frame[:, :slider_position] = output_img[:, :slider_position]
         
         # Draw the slider line
         cv2.line(combined_frame, (slider_position, 0), (slider_position, h), (0, 255, 0), 2)
@@ -201,11 +247,10 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
         
         # Create result video
         progress(0.8, "Creating result video")
+        
+        # The output directory structure is: output_dir/model_name/video_name/
         result_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
         os.makedirs(result_dir, exist_ok=True)
-        
-        output_frames_dir = os.path.join(result_dir)
-        result_video_path = os.path.join(temp_dir, f"result_{job_id}.mp4")
         
         # Get frame rate from the original video
         cap = cv2.VideoCapture(video_path)
@@ -216,7 +261,7 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
         comparison_video_path = os.path.join(temp_dir, f"comparison_{job_id}.mp4")
         comparison_video_path = create_comparison_with_slider(
             frames_dir,
-            output_frames_dir,
+            result_dir,  # This is where the output frames are
             comparison_video_path,
             fps=fps
         )
@@ -224,19 +269,27 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
         # Create regular output video
         output_video_path = os.path.join(temp_dir, f"output_{job_id}.mp4")
         
-        # Get all output frames
+        # Get all output frames - look for files with "Pred" in the name
         output_frames = sorted([
-            f for f in os.listdir(output_frames_dir) 
+            f for f in os.listdir(result_dir) 
             if f.endswith('.png') and 'Pred' in f
         ])
         
         # Create a video from the output frames
         if output_frames:
-            h, w, _ = cv2.imread(os.path.join(output_frames_dir, output_frames[0])).shape
-            video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+            # Read the first frame to get dimensions
+            sample_frame = cv2.imread(os.path.join(result_dir, output_frames[0]))
+            h, w, _ = sample_frame.shape
+            
+            video_writer = cv2.VideoWriter(
+                output_video_path, 
+                cv2.VideoWriter_fourcc(*'mp4v'), 
+                fps, 
+                (w, h)
+            )
             
             for frame_name in output_frames:
-                frame = cv2.imread(os.path.join(output_frames_dir, frame_name))
+                frame = cv2.imread(os.path.join(result_dir, frame_name))
                 video_writer.write(frame)
                 
             video_writer.release()
