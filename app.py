@@ -425,6 +425,10 @@ def process_video_thread(thread_id, video_path, task_name, tile_size, tile_overl
                          ffn_expansion_factor=None, batch_size=None):
     """Threaded function to process videos"""
     try:
+        # Create a dummy progress callback if none was provided
+        if progress is None:
+            progress = lambda value, desc: print(f"Progress: {value*100:.1f}% - {desc}")
+            
         result = process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
                                denoising_strength, advanced_settings, output_format, use_custom_model,
                                custom_model_path, custom_config_path, progress,
@@ -447,11 +451,15 @@ def process_video_thread(thread_id, video_path, task_name, tile_size, tile_overl
 
 def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
                  denoising_strength, advanced_settings, output_format, use_custom_model=False, 
-                 custom_model_path="", custom_config_path="", progress=gr.Progress(),
+                 custom_model_path="", custom_config_path="", progress=None,
                  # Additional parameters
                  output_fps=None, frame_limit=None, device_id=None, model_dim=None,
                  ffn_expansion_factor=None, batch_size=None):
     """Process the uploaded video and return the result"""
+    
+    # Create a default progress callback if none was provided
+    if progress is None:
+        progress = lambda value, desc: print(f"Progress: {value*100:.1f}% - {desc}")
     
     if video_path is None:
         return None, None, "Please upload a video to process."
@@ -467,6 +475,217 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
     # Create temporary working directories
     job_id = generate_random_id()
     temp_dir = os.path.join(tempfile.gettempdir(), f"turtle_{job_id}")
+    frames_dir = os.path.join(temp_dir, "frames")
+    output_dir = os.path.join(temp_dir, "output")
+    
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs(frames_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    try:
+        # Get task-specific parameters
+        task_params = SUPPORTED_TASKS[task_name]
+        
+        # Check for custom model if specified
+        if use_custom_model and custom_model_path and custom_config_path:
+            model_path = custom_model_path
+            config_file = custom_config_path
+        else:
+            model_path = task_params['model_path']
+            config_file = task_params['config_file']
+            
+        model_type = task_params['model_type']
+        
+        # Calculate target fps based on sample rate
+        # 1.0 = original fps, 0.5 = half fps, etc.
+        target_fps = None if sample_rate >= 1.0 else None  # None means use original fps
+        
+        # Apply frame limit if specified
+        frames_to_process = int(frame_limit) if frame_limit is not None and frame_limit > 0 else None
+        
+        # Extract frames from video
+        progress(0.05, desc="Preparing to extract frames from video")
+        num_frames = extract_frames(video_path, frames_dir, target_fps=target_fps, clear_output_dir=True)
+        
+        # If frame limit is specified, limit the number of frames to process
+        if frames_to_process is not None and frames_to_process < num_frames:
+            # Keep only the first 'frames_to_process' frames
+            all_frames = sorted(os.listdir(frames_dir))
+            for frame_file in all_frames[frames_to_process:]:
+                os.remove(os.path.join(frames_dir, frame_file))
+            num_frames = frames_to_process
+            print(f"Limited to processing {num_frames} frames.")
+        
+        if num_frames == 0:
+            return None, None, "Failed to extract frames from video."
+        
+        progress(0.3, desc=f"Extracted {num_frames} frames. Starting model inference.")
+        
+        # Adjust noise level for denoising task
+        if task_name == "Video Denoising" and noise_level is not None:
+            noise_sigma = float(noise_level) / 255.0
+            print(f"Using noise level: {noise_level} ({noise_sigma})")
+        else:
+            noise_sigma = 50.0 / 255.0  # Default
+        
+        # Handle device
+        device_str = f"cuda:{device_id}" if device_id is not None else "cuda"
+        
+        # Run inference
+        inference_no_gt(
+            model_path=model_path,
+            model_name=f"{task_name}_{job_id}",
+            data_dir=frames_dir,
+            config_file=config_file,
+            tile=tile_size,
+            tile_overlap=tile_overlap,
+            save_image=True,
+            model_type=model_type,
+            do_pacthes=True,
+            image_out_path=output_dir,
+            noise_sigma=noise_sigma,
+            progress_callback=lambda value, text: progress(0.3 + 0.5 * value, desc=text)
+        )
+        
+        # Create result video
+        progress(0.8, desc="Creating result videos")
+        
+        # Find the model output directory - it's structured as output_dir/task_name_job_id/frames_dir_basename
+        model_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
+        frames_dir_basename = os.path.basename(frames_dir)
+        result_dir = os.path.join(model_dir, frames_dir_basename)
+        
+        # If the result_dir doesn't exist, use model_dir as a fallback
+        if not os.path.exists(result_dir):
+            result_dir = model_dir
+            
+        # Verify that result directory contains processed frames
+        output_frames = [f for f in os.listdir(result_dir) if 'Pred' in f and f.endswith('.png')]
+        if not output_frames:
+            return None, None, f"No output frames found in {result_dir}. Processing may have failed."
+        
+        # Get frame rate from the original video
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 30  # Default to 30 fps if we can't get the frame rate
+        cap.release()
+        
+        # Use specified output FPS if provided
+        if output_fps is not None and output_fps > 0:
+            fps = output_fps
+        
+        # Set the video codec based on output format
+        video_codec = 'avc1' if output_format == 'MP4' else 'vp9'
+        video_ext = '.mp4' if output_format == 'MP4' else '.webm'
+        
+        # Create the comparison video with slider
+        progress(0.85, desc="Creating comparison video")
+        comparison_video_path = os.path.join(temp_dir, f"comparison_{job_id}{video_ext}")
+        comparison_result = create_comparison_with_slider(
+            frames_dir,
+            result_dir,
+            comparison_video_path,
+            fps=fps
+        )
+        
+        if isinstance(comparison_result, str) and comparison_result.startswith("Error"):
+            print(f"Warning creating comparison video: {comparison_result}")
+        
+        # Create regular output video from just the processed frames
+        progress(0.95, desc="Creating output video")
+        output_video_path = os.path.join(temp_dir, f"output_{job_id}{video_ext}")
+        output_result = create_regular_output_video(
+            result_dir,
+            output_video_path,
+            fps=fps
+        )
+        
+        if isinstance(output_result, str) and output_result.startswith("Error"):
+            print(f"Warning creating output video: {output_result}")
+        
+        # Resource usage info
+        gpu_info = ""
+        if torch.cuda.is_available():
+            memory_used = torch.cuda.memory_allocated() / 1024**3
+            memory_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            gpu_info = f" | GPU Memory: {memory_used:.2f}GB / {memory_total:.2f}GB"
+        
+        progress(1.0, desc=f"Processing complete{gpu_info}")
+        
+        # Check that both videos exist and are valid
+        output_video_exists = os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 0
+        comparison_video_exists = os.path.exists(comparison_video_path) and os.path.getsize(comparison_video_path) > 0
+        
+        if not output_video_exists and not comparison_video_exists:
+            return None, None, "Failed to create output videos. Check logs for details."
+        
+        # Return results, with appropriate messages if one video failed
+        if not output_video_exists:
+            return None, comparison_video_path, "Comparison video created, but output video failed."
+        
+        if not comparison_video_exists:
+            return output_video_path, None, "Output video created, but comparison video failed."
+        
+        return output_video_path, comparison_video_path, f"Processing completed successfully. Processed {num_frames} frames.{gpu_info}"
+        
+    except Exception as e:
+        import traceback
+        trace = traceback.format_exc()
+        print(f"Error during processing: {str(e)}")
+        print(trace)
+        return None, None, f"Error during processing: {str(e)}\n{trace}"
+    
+    finally:
+        # Don't clean up immediately so we can debug if needed
+        # We can add a cleanup timer to remove these files after some time
+        pass
+
+def validate_image(image_path):
+    """Validate image before processing"""
+    if image_path is None:
+        return False, "Please upload an image file."
+    
+    try:
+        img = Image.open(image_path)
+        width, height = img.size
+        
+        # Estimate processing time based on resolution
+        resolution_factor = (width * height) / (1280 * 720)  # Relative to 720p
+        est_time = max(2, resolution_factor * 2)  # Base time of 2 seconds
+        
+        if width * height > 3840 * 2160:
+            return False, f"Image resolution ({width}x{height}) is very high. Consider resizing for faster processing."
+        
+        aspect_ratio = width / height
+        orientation = "Vertical" if aspect_ratio < 1 else "Horizontal"
+        
+        return True, f"{orientation} image validated. Resolution: {width}x{height}. Estimated processing time: {est_time:.1f} seconds"
+    except Exception as e:
+        return False, f"Error validating image: {str(e)}"
+
+def image_process(image_path, task_name, tile_size, tile_overlap, noise_level, denoising_strength, 
+                 advanced_settings, use_custom_model=False, custom_model_path="", 
+                 custom_config_path="", progress=None,
+                 # Additional parameters
+                 device_id=None, model_dim=None, ffn_expansion_factor=None):
+    """Process a single image and return the result"""
+    
+    # Create a default progress callback if none was provided
+    if progress is None:
+        progress = lambda value, desc: print(f"Progress: {value*100:.1f}% - {desc}")
+    
+    # Validate image first
+    valid, message = validate_image(image_path)
+    if not valid:
+        return None, message
+    
+    if task_name not in SUPPORTED_TASKS:
+        return None, f"Unknown task: {task_name}. Supported tasks are: {', '.join(SUPPORTED_TASKS.keys())}"
+    
+    # Create temporary working directories
+    job_id = generate_random_id()
+    temp_dir = os.path.join(tempfile.gettempdir(), f"turtle_img_{job_id}")
     frames_dir = os.path.join(temp_dir, "frames")
     output_dir = os.path.join(temp_dir, "output")
     
@@ -509,20 +728,6 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
         else:
             noise_sigma = 50.0 / 255.0  # Default
         
-        # Parse any custom advanced settings
-        custom_params = {}
-        if advanced_settings and advanced_settings.strip():
-            try:
-                # Try to parse as key=value pairs, one per line or comma-separated
-                for line in advanced_settings.replace(',', '\n').split('\n'):
-                    if '=' in line:
-                        key, value = line.strip().split('=', 1)
-                        custom_params[key.strip()] = value.strip()
-                        
-                print(f"Custom parameters: {custom_params}")
-            except Exception as e:
-                print(f"Failed to parse advanced settings: {str(e)}")
-        
         # Handle device
         device_str = f"cuda:{device_id}" if device_id is not None else "cuda"
         
@@ -539,11 +744,7 @@ def process_video(video_path, task_name, tile_size, tile_overlap, sample_rate, n
             do_pacthes=True,
             image_out_path=output_dir,
             noise_sigma=noise_sigma,
-            progress_callback=lambda value, text: progress(0.3 + 0.6 * value, desc=text),
-            # Advanced parameters
-            device=device_str if torch.cuda.is_available() else "cpu",
-            dim=model_dim,
-            ffn_expansion_factor=ffn_expansion_factor
+            progress_callback=lambda value, text: progress(0.3 + 0.6 * value, desc=text)
         )
         
         progress(0.9, desc="Processing complete, retrieving output image")
@@ -844,7 +1045,7 @@ def create_ui():
                         target=process_video_thread,
                         args=(job_id, video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level,
                               denoising_strength, advanced_settings, output_format, use_custom_model,
-                              custom_model_path, custom_config_path, None, 
+                              custom_model_path, custom_config_path, gr.Progress(),  # Pass progress object
                               # Additional parameters
                               output_fps, frame_limit, device_id, model_dim, ffn_expansion_factor, batch_size)
                     )
@@ -1122,222 +1323,4 @@ def create_ui():
 
 if __name__ == "__main__":
     app = create_ui()
-    app.queue().launch(share=False) exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
-    
-    try:
-        # Get task-specific parameters
-        task_params = SUPPORTED_TASKS[task_name]
-        
-        # Check for custom model if specified
-        if use_custom_model and custom_model_path and custom_config_path:
-            model_path = custom_model_path
-            config_file = custom_config_path
-        else:
-            model_path = task_params['model_path']
-            config_file = task_params['config_file']
-            
-        model_type = task_params['model_type']
-        
-        # Calculate target fps based on sample rate
-        # 1.0 = original fps, 0.5 = half fps, etc.
-        target_fps = None if sample_rate >= 1.0 else None  # None means use original fps
-        
-        # Apply frame limit if specified
-        frames_to_process = frame_limit
-        
-        # Extract frames from video
-        progress(0.05, desc="Preparing to extract frames from video")
-        num_frames = extract_frames(video_path, frames_dir, target_fps=target_fps, max_frames=frames_to_process)
-        
-        if num_frames == 0:
-            return None, None, "Failed to extract frames from video."
-        
-        progress(0.3, desc=f"Extracted {num_frames} frames. Starting model inference.")
-        
-        # Parse any custom advanced settings
-        custom_params = {}
-        if advanced_settings and advanced_settings.strip():
-            try:
-                # Try to parse as key=value pairs, one per line or comma-separated
-                for line in advanced_settings.replace(',', '\n').split('\n'):
-                    if '=' in line:
-                        key, value = line.strip().split('=', 1)
-                        custom_params[key.strip()] = value.strip()
-                        
-                print(f"Custom parameters: {custom_params}")
-            except Exception as e:
-                print(f"Failed to parse advanced settings: {str(e)}")
-        
-        # Adjust noise level for denoising task
-        if task_name == "Video Denoising" and noise_level is not None:
-            noise_sigma = float(noise_level) / 255.0
-            print(f"Using noise level: {noise_level} ({noise_sigma})")
-        else:
-            noise_sigma = 50.0 / 255.0  # Default
-        
-        # Handle additional parameters
-        device_str = f"cuda:{device_id}" if device_id is not None else "cuda"
-        
-        # Run inference
-        inference_no_gt(
-            model_path=model_path,
-            model_name=f"{task_name}_{job_id}",
-            data_dir=frames_dir,
-            config_file=config_file,
-            tile=tile_size,
-            tile_overlap=tile_overlap,
-            save_image=True,
-            model_type=model_type,
-            do_pacthes=True,
-            image_out_path=output_dir,
-            noise_sigma=noise_sigma,
-            progress_callback=lambda value, text: progress(0.3 + 0.5 * value, desc=text),
-            # Advanced parameters
-            device=device_str if torch.cuda.is_available() else "cpu",
-            dim=model_dim,
-            ffn_expansion_factor=ffn_expansion_factor,
-            batch_size=batch_size
-        )
-        
-        # Create result video
-        progress(0.8, desc="Creating result videos")
-        
-        # Find the model output directory - it's structured as output_dir/task_name_job_id/frames_dir_basename
-        model_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
-        frames_dir_basename = os.path.basename(frames_dir)
-        result_dir = os.path.join(model_dir, frames_dir_basename)
-        
-        # If the result_dir doesn't exist, use model_dir as a fallback
-        if not os.path.exists(result_dir):
-            result_dir = model_dir
-            
-        # Verify that result directory contains processed frames
-        output_frames = [f for f in os.listdir(result_dir) if 'Pred' in f and f.endswith('.png')]
-        if not output_frames:
-            return None, None, f"No output frames found in {result_dir}. Processing may have failed."
-        
-        # Get frame rate from the original video
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps <= 0:
-            fps = 30  # Default to 30 fps if we can't get the frame rate
-        cap.release()
-        
-        # Use specified output FPS if provided
-        if output_fps is not None and output_fps > 0:
-            fps = output_fps
-        
-        # Set the video codec based on output format
-        video_codec = 'avc1' if output_format == 'MP4' else 'vp9'
-        video_ext = '.mp4' if output_format == 'MP4' else '.webm'
-        
-        # Create the comparison video with slider
-        progress(0.85, desc="Creating comparison video")
-        comparison_video_path = os.path.join(temp_dir, f"comparison_{job_id}{video_ext}")
-        comparison_result = create_comparison_with_slider(
-            frames_dir,
-            result_dir,
-            comparison_video_path,
-            fps=fps
-        )
-        
-        if isinstance(comparison_result, str) and comparison_result.startswith("Error"):
-            print(f"Warning creating comparison video: {comparison_result}")
-        
-        # Create regular output video from just the processed frames
-        progress(0.95, desc="Creating output video")
-        output_video_path = os.path.join(temp_dir, f"output_{job_id}{video_ext}")
-        output_result = create_regular_output_video(
-            result_dir,
-            output_video_path,
-            fps=fps
-        )
-        
-        if isinstance(output_result, str) and output_result.startswith("Error"):
-            print(f"Warning creating output video: {output_result}")
-        
-        # Resource usage info
-        gpu_info = ""
-        if torch.cuda.is_available():
-            memory_used = torch.cuda.memory_allocated() / 1024**3
-            memory_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            gpu_info = f" | GPU Memory: {memory_used:.2f}GB / {memory_total:.2f}GB"
-        
-        progress(1.0, desc=f"Processing complete{gpu_info}")
-        
-        # Check that both videos exist and are valid
-        output_video_exists = os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 0
-        comparison_video_exists = os.path.exists(comparison_video_path) and os.path.getsize(comparison_video_path) > 0
-        
-        if not output_video_exists and not comparison_video_exists:
-            return None, None, "Failed to create output videos. Check logs for details."
-        
-        # Return results, with appropriate messages if one video failed
-        if not output_video_exists:
-            return None, comparison_video_path, "Comparison video created, but output video failed."
-        
-        if not comparison_video_exists:
-            return output_video_path, None, "Output video created, but comparison video failed."
-        
-        return output_video_path, comparison_video_path, f"Processing completed successfully. Processed {num_frames} frames.{gpu_info}"
-        
-    except Exception as e:
-        import traceback
-        trace = traceback.format_exc()
-        print(f"Error during processing: {str(e)}")
-        print(trace)
-        # Clean up on error
-        return None, None, f"Error during processing: {str(e)}\n{trace}"
-    
-    finally:
-        # Don't clean up immediately so we can debug if needed
-        # We can add a cleanup timer to remove these files after some time
-        pass
-
-def validate_image(image_path):
-    """Validate image before processing"""
-    if image_path is None:
-        return False, "Please upload an image file."
-    
-    try:
-        img = Image.open(image_path)
-        width, height = img.size
-        
-        # Estimate processing time based on resolution
-        resolution_factor = (width * height) / (1280 * 720)  # Relative to 720p
-        est_time = max(2, resolution_factor * 2)  # Base time of 2 seconds
-        
-        if width * height > 3840 * 2160:
-            return False, f"Image resolution ({width}x{height}) is very high. Consider resizing for faster processing."
-        
-        aspect_ratio = width / height
-        orientation = "Vertical" if aspect_ratio < 1 else "Horizontal"
-        
-        return True, f"{orientation} image validated. Resolution: {width}x{height}. Estimated processing time: {est_time:.1f} seconds"
-    except Exception as e:
-        return False, f"Error validating image: {str(e)}"
-
-def image_process(image_path, task_name, tile_size, tile_overlap, noise_level, denoising_strength, 
-                 advanced_settings, use_custom_model=False, custom_model_path="", 
-                 custom_config_path="", progress=gr.Progress(),
-                 # Additional parameters
-                 device_id=None, model_dim=None, ffn_expansion_factor=None):
-    """Process a single image and return the result"""
-    
-    # Validate image first
-    valid, message = validate_image(image_path)
-    if not valid:
-        return None, message
-    
-    if task_name not in SUPPORTED_TASKS:
-        return None, f"Unknown task: {task_name}. Supported tasks are: {', '.join(SUPPORTED_TASKS.keys())}"
-    
-    # Create temporary working directories
-    job_id = generate_random_id()
-    temp_dir = os.path.join(tempfile.gettempdir(), f"turtle_img_{job_id}")
-    frames_dir = os.path.join(temp_dir, "frames")
-    output_dir = os.path.join(temp_dir, "output")
-    
-    os.makedirs(temp_dir, exist_ok=True)
-    os.makedirs(frames_dir,
+    app.queue().launch(share=True)
