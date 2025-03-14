@@ -718,7 +718,7 @@ For more information, see [the Turtle GitHub repository](https://github.com/kjan
         """)
         
         # Add keyboard shortcuts via JS
-        app.load(None, None, None, _js="""
+        app.load(None, None, None, js="""
             function setup_shortcuts() {
                 document.addEventListener('keydown', (e) => {
                     // Ctrl+Enter to process
