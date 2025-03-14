@@ -180,7 +180,7 @@ def run_inference(video_name, test_loader,
                   tile_overlap,
                   model_type,
                   progress_callback=None):
-    
+
     # Enable memory caching
     torch.backends.cudnn.benchmark = True
 
@@ -198,7 +198,7 @@ def run_inference(video_name, test_loader,
     total_frames = len(test_loader.dataset)
     
     for ix in range(total_frames):
-        # Update progress based on frame index
+        # Calculate progress and update if callback is provided
         if progress_callback is not None:
             # Convert to range 0.3-0.8 (assuming extraction was 0-0.3 and video creation will be 0.8-1.0)
             progress_value = 0.3 + (0.5 * (ix + 1) / total_frames)
@@ -224,47 +224,40 @@ def run_inference(video_name, test_loader,
         else:
             # superresolution
             if model_type == "SR":
-                previous_frame = torch.nn.functional.interpolate(previous_frame, 
-                                                                    scale_factor=1/4,
-                                                                    mode="bicubic")
-                current_frame = torch.nn.functional.interpolate(current_frame, 
-                                                                    scale_factor=1/4, 
-                                                                    mode="bicubic")
+                previous_frame = torch.nn.functional.interpolate(previous_frame.unsqueeze(0), 
+                                                                scale_factor=1/4,
+                                                                mode="bicubic").squeeze(0)
+                current_frame = torch.nn.functional.interpolate(current_frame.unsqueeze(0), 
+                                                                scale_factor=1/4, 
+                                                                mode="bicubic").squeeze(0)
             # do inference on whole frame if the memory can be fit.
             x = torch.concat((previous_frame.unsqueeze(0), 
-                            current_frame.unsqueeze(0)), dim=0).to(device)
-            x2, k_cache, v_cache = model(x.unsqueeze(0), k_cache, v_cache)
+                            current_frame.unsqueeze(0)), dim=0).unsqueeze(0).to(device)
+            x2, k_cache, v_cache = model(x, k_cache, v_cache)
             x2 = torch.clamp(x2, 0, 1)
 
         x2 = x2.squeeze(0)
         x2 = x2[:, :h, :w]
         
         if save_img:
-            fig, axs = plt.subplots(1, 2, figsize=(10,10))
-            
-            axs[0].imshow(current_frame.permute(1, 2, 0).detach().cpu().numpy())
-            axs[1].imshow(x2.permute(1, 2, 0).detach().cpu().numpy())
-            
-            axs[0].set_title('Input')
-            axs[1].set_title('Pred')
-
-            plt.tight_layout()
-
-            # Ensure the directory for the model exists
+            # Create necessary directories
             base_path = image_out_path
             base_path = os.path.join(base_path, model_name)
             os.makedirs(base_path, exist_ok=True)
             base_path = os.path.join(base_path, video_name)
             os.makedirs(base_path, exist_ok=True)
 
-            file_name = f"Frame_{ix+1}.png"  
+            # Save both input and prediction images separately
             file_name_inp = os.path.join(base_path, f"Frame_{ix+1}_Input.png") 
             file_name_pred = os.path.join(base_path, f"Frame_{ix+1}_Pred.png")   
             
-            save_path = os.path.join(base_path, file_name)
-            plt.savefig(save_path, bbox_inches='tight')
-            cv2.imwrite(file_name_pred, cv2.cvtColor((x2.permute(1, 2, 0).detach().cpu().numpy()*255).astype(np.uint8), cv2.COLOR_BGR2RGB))
-            cv2.imwrite(file_name_inp, cv2.cvtColor((current_frame.permute(1, 2, 0).detach().cpu().numpy()*255).astype(np.uint8), cv2.COLOR_BGR2RGB))
+            # Convert tensors to numpy arrays for saving
+            input_img = current_frame.permute(1, 2, 0).detach().cpu().numpy()
+            pred_img = x2.permute(1, 2, 0).detach().cpu().numpy()
+            
+            # Save images using OpenCV
+            cv2.imwrite(file_name_inp, cv2.cvtColor((input_img*255).astype(np.uint8), cv2.COLOR_RGB2BGR))
+            cv2.imwrite(file_name_pred, cv2.cvtColor((pred_img*255).astype(np.uint8), cv2.COLOR_RGB2BGR))
 
         previous_frame = current_frame
         
@@ -323,14 +316,6 @@ def main(model_path,
 
     model, device = load_model(model_path, model)
 
-    # Instead of looking for videos in the data_dir, 
-    # just treat the data_dir itself as one video
-    
-    # videos = sorted(glob.glob(os.path.join(data_dir, '*')))
-    # for video in videos:
-    #     video_name = video.split('/')[-1]
-    #     if video_name:
-    
     # The frames directory itself is our "video"
     video_name = os.path.basename(data_dir)
     
@@ -353,7 +338,7 @@ def main(model_path,
                   tile=tile,
                   tile_overlap=tile_overlap,
                   model_type=model_type,
-                  progress_callback=progress_callback)  # Pass it here
+                  progress_callback=progress_callback)  # Pass the progress callback
 
     return 0, 0
 
