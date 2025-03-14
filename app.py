@@ -123,13 +123,22 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
     """
     Create a video with a sliding comparison between input and output frames
     """
-    # Get a sample frame to determine dimensions
-    input_frames = sorted([f for f in os.listdir(input_frames_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
-    output_frames = sorted([f for f in os.listdir(output_frames_dir) if f.endswith('.png') and 'Pred' in f])
+    # Get all input frames (from the original directory)
+    input_frames = sorted([
+        f for f in os.listdir(input_frames_dir) 
+        if f.endswith(('.png', '.jpg', '.jpeg'))
+    ])
+    
+    # Get all output frames - these should have consistent naming like "Frame_0001_Pred.png"
+    output_frames = sorted([
+        f for f in os.listdir(output_frames_dir) 
+        if 'Pred' in f and f.endswith('.png')
+    ])
     
     if not input_frames or not output_frames:
         return "Error: No frames found"
     
+    # Get frame dimensions from first input frame
     input_frame_path = os.path.join(input_frames_dir, input_frames[0])
     frame = cv2.imread(input_frame_path)
     h, w, _ = frame.shape
@@ -138,12 +147,10 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video_writer = cv2.VideoWriter(output_video_path, fourcc, fps, (w, h))
     
-    total_frames = min(len(input_frames), len(output_frames))
-    
-    # Map between frame numbers in input and output
+    # Create frame mapping from output frame names to frame numbers
     frame_map = {}
     for output_frame in output_frames:
-        # Extract frame number from names like "Frame_1_Pred.png"
+        # Extract frame number from names like "Frame_0001_Pred.png"
         if '_' in output_frame:
             parts = output_frame.split('_')
             if len(parts) >= 2 and parts[0] == "Frame":
@@ -153,12 +160,12 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
                 except ValueError:
                     continue
     
-    for i, input_frame in enumerate(input_frames[:total_frames]):
-        # Get corresponding frame number (i+1 because frames are usually 1-indexed)
-        frame_num = i + 1
+    # Use input frames as base sequence and find corresponding output frames
+    for i, input_frame in enumerate(input_frames):
+        frame_num = i + 1  # 1-indexed frame numbers
         
         # Calculate slider position based on frame index
-        slider_position = int((i / total_frames) * w)
+        slider_position = int((i / len(input_frames)) * w)
         
         # Read input frame
         input_img = cv2.imread(os.path.join(input_frames_dir, input_frame))
@@ -166,14 +173,15 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
         # Find corresponding output frame
         if frame_num in frame_map:
             output_frame = frame_map[frame_num]
-            output_img = cv2.imread(os.path.join(output_frames_dir, output_frame))
+            output_path = os.path.join(output_frames_dir, output_frame)
+            output_img = cv2.imread(output_path)
+            
+            # Make sure the output image exists and has the right size
+            if output_img is None or output_img.shape[:2] != input_img.shape[:2]:
+                output_img = input_img.copy()  # Fallback to input if there's an issue
         else:
             # If we don't have a matching output frame, use the input frame
             output_img = input_img.copy()
-        
-        # Make sure the frames are the same size
-        if output_img.shape[:2] != input_img.shape[:2]:
-            output_img = cv2.resize(output_img, (input_img.shape[1], input_img.shape[0]))
         
         # Create combined frame with sliding comparison
         combined_frame = input_img.copy()
