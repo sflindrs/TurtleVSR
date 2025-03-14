@@ -1,6 +1,7 @@
 import cv2
 import os
 import shutil
+import math
 
 def extract_frames(video_path, frames_dir, target_fps=None, clear_output_dir=True):
     """
