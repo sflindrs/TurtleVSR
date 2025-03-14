@@ -858,7 +858,8 @@ def create_ui():
                 with gr.Row():
                     with gr.Column(scale=1):
                         # Input section
-                        input_video = gr.Video(label="Input Video", type="filepath")
+                        # Fix: Changed Video component to remove type="filepath" parameter
+                        input_video = gr.Video(label="Input Video")
                         task = gr.Dropdown(
                             choices=list(SUPPORTED_TASKS.keys()),
                             value="Video Super-Resolution",
@@ -960,8 +961,9 @@ def create_ui():
                         
                     # Output section
                     with gr.Column(scale=1):
-                        result_video = gr.Video(label="Result Video", interactive=False, elem_classes="vertical-video")
-                        comparison_video = gr.Video(label="Side-by-Side Comparison", interactive=False, elem_classes="vertical-video")
+                        # Fix: Removed interactive parameter from Video components
+                        result_video = gr.Video(label="Result Video", elem_classes="vertical-video")
+                        comparison_video = gr.Video(label="Side-by-Side Comparison", elem_classes="vertical-video")
                 
                 # Define processing function with job ID tracking
                 def start_processing(video_path, task_name, tile_size, tile_overlap, sample_rate, noise_level, 
@@ -1066,8 +1068,8 @@ def create_ui():
             with gr.TabItem("Image Processing"):
                 with gr.Row():
                     with gr.Column(scale=1):
-                        # Input section
-                        input_image = gr.Image(label="Input Image", type="filepath")
+                        # Input section - Fix: changed type="filepath" to source="upload"
+                        input_image = gr.Image(label="Input Image", source="upload")
                         image_task = gr.Dropdown(
                             choices=list(SUPPORTED_TASKS.keys()),
                             value="Video Super-Resolution",
@@ -1149,14 +1151,14 @@ def create_ui():
                         
                     # Output section for image
                     with gr.Column(scale=1):
-                        result_image = gr.Image(label="Processed Image", interactive=False)
+                        result_image = gr.Image(label="Processed Image")
                         with gr.Row():
                             with gr.Column(scale=1):
                                 gr.Markdown("### Before")
-                                input_image_display = gr.Image(label="", interactive=False)
+                                input_image_display = gr.Image(label="")
                             with gr.Column(scale=1):
                                 gr.Markdown("### After")
-                                output_image_display = gr.Image(label="", interactive=False)
+                                output_image_display = gr.Image(label="")
                 
                 # Process image button click event
                 process_image_button.click(
@@ -1204,16 +1206,15 @@ def create_ui():
                 
                 ## Paper
                 
-                [Unified Video Restoration via Recurrent Propagation](https://arxiv.org/abs/2312.02984)
+                [Learning Truncated Causal History Model for Video Restoration](https://arxiv.org/abs/2410.03936)
                 
                 ## Citation
                 
                 ```
-                @inproceedings{fan2024turtle,
-                    title={Unified Video Restoration via Recurrent Propagation},
-                    author={Fan, Xuanchen and Dong, Ruoyu and Qi, Mingdeng and Zhang, Xinyuan and Zuo, Wangmeng and Lin, Xiao and Li, Rui and Zhang, Lei},
-                    booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-                    year={2024}
+                @inproceedings{ghasemabadilearning,
+                  title={Learning Truncated Causal History Model for Video Restoration},
+                  author={Ghasemabadi, Amirhosein and Janjua, Muhammad Kamran and Salameh, Mohammad and Niu, Di},
+                  booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems}
                 }
                 ```
                 
