@@ -193,6 +193,7 @@ def run_inference(video_name, test_loader,
     previous_frame = None
 
     k_cache, v_cache = None, None
+    frame_start_time = time.time()
     for ix in range(len(test_loader.dataset)):
         print(ix)
         current_frame = test_loader.dataset[ix][1]
@@ -257,12 +258,18 @@ def run_inference(video_name, test_loader,
             cv2.imwrite(file_name_inp, cv2.cvtColor((current_frame.permute(1, 2, 0).detach().cpu().numpy()*255).astype(np.uint8), cv2.COLOR_BGR2RGB))
 
         previous_frame = current_frame
-
+        
         # Calculate and print time taken for current frame
-        end_time = time.time()
-        frames_processed = len(test_loader.dataset)
-        print(f"Processed {frames_processed} frames in {end_time - start_time:.2f} seconds")
-        print(f"FPS: {frames_processed / (end_time - start_time):.2f}")
+        frame_end_time = time.time()
+        frame_time = frame_end_time - frame_start_time
+        print(f"Frame {ix+1} processed in {frame_time:.3f} seconds")
+        frame_start_time = time.time()
+
+    # Calculate and print time taken for current frame
+    end_time = time.time()
+    frames_processed = len(test_loader.dataset)
+    print(f"Processed {frames_processed} frames in {end_time - start_time:.2f} seconds")
+    print(f"FPS: {frames_processed / (end_time - start_time):.2f}")
 
     return None, None
 
@@ -301,35 +308,42 @@ def main(model_path,
     print(f"tile_overlap: {tile_overlap}")
     print(F"sample: {sample}")
     
-
     opt = parse(config_file, is_train=True)
     model = create_video_model(opt, model_type)
 
     model, device = load_model(model_path, model)
-    videos = sorted(glob.glob(os.path.join(data_dir, '*')))
-
-    for video in videos:
-        video_name = video.split('/')[-1]
-        if video_name:
-
-            data = VideoLoader(data_dir,
-                                None)
-                
-            test_loader = torch.utils.data.DataLoader(data,
-                                                    batch_size=1, 
-                                                    num_workers=1, 
-                                                    shuffle=False)
-            _, _ = run_inference(video_name,
-                                test_loader,
-                                model,
-                                device,
-                                model_name,
-                                save_img=save_image,
-                                do_patched=do_pacthes,
-                                image_out_path=image_out_path,
-                                tile=tile,
-                                tile_overlap=tile_overlap,
-                                model_type=model_type)
+    
+    # CHANGE THIS SECTION
+    # Instead of looking for videos in the data_dir, 
+    # just treat the data_dir itself as one video
+    
+    # videos = sorted(glob.glob(os.path.join(data_dir, '*')))
+    # for video in videos:
+    #     video_name = video.split('/')[-1]
+    #     if video_name:
+    
+    # The frames directory itself is our "video"
+    video_name = os.path.basename(data_dir)
+    
+    # Create the data loader for all frames in this directory
+    data = VideoLoader(data_dir, None)
+    test_loader = torch.utils.data.DataLoader(data,
+                                          batch_size=1, 
+                                          num_workers=1, 
+                                          shuffle=False)
+    
+    # Run inference once for all frames
+    _, _ = run_inference(video_name,
+                      test_loader,
+                      model,
+                      device,
+                      model_name,
+                      save_img=save_image,
+                      do_patched=do_pacthes,
+                      image_out_path=image_out_path,
+                      tile=tile,
+                      tile_overlap=tile_overlap,
+                      model_type=model_type)
 
     return 0, 0
 
