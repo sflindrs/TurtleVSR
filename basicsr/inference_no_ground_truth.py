@@ -61,7 +61,7 @@ def run_inference_patched(img_lq_prev,
                           scale=1,
                           model_type='t0'):
     
-    # Move input tensors to device first
+    # Move input tensors to device just before processing
     img_lq_prev = img_lq_prev.to(device)
     img_lq_curr = img_lq_curr.to(device)
     
@@ -85,60 +85,80 @@ def run_inference_patched(img_lq_prev,
     h_idx_list = list(range(0, h-tile, stride)) + [h-tile]
     w_idx_list = list(range(0, w-tile, stride)) + [w-tile]
     
-    # Explicitly create accumulators on the device
-    E = torch.zeros(b, c, h, w, device=device)
-    W = torch.zeros(b, c, h, w, device=device)
+    # Create accumulators on CPU first
+    E = torch.zeros(b, c, h, w)
+    W = torch.zeros_like(E)
 
     print(f"E: {E.shape}")
     print(f"W: {W.shape}")
 
     patch_dict_k = {}
     patch_dict_v = {}
+    
+    # Process tile by tile
     for h_idx in h_idx_list:
         for w_idx in w_idx_list:
-
+            # Extract patches
             in_patch_curr = img_lq_curr[..., h_idx:h_idx+tile, w_idx:w_idx+tile]
             in_patch_prev = img_lq_prev[..., h_idx:h_idx+tile, w_idx:w_idx+tile]
 
             # prepare for SR following EAVSR.
             if model_type == "SR":
                 in_patch_prev = torch.nn.functional.interpolate(in_patch_prev, 
-                                                                scale_factor=1/4,
-                                                                mode="bicubic")
+                                                               scale_factor=1/4,
+                                                               mode="bicubic")
                 in_patch_curr = torch.nn.functional.interpolate(in_patch_curr, 
-                                                                scale_factor=1/4, 
-                                                                mode="bicubic")
+                                                               scale_factor=1/4, 
+                                                               mode="bicubic")
 
             x = torch.concat((in_patch_prev.unsqueeze(0), 
-                            in_patch_curr.unsqueeze(0)), dim=1)
-            # x is already on device since in_patch_curr and in_patch_prev are on device
+                             in_patch_curr.unsqueeze(0)), dim=1)
 
             if prev_patch_dict_k is not None and prev_patch_dict_v is not None:
-                old_k_cache = [x.to(device) if x is not None else None for x in prev_patch_dict_k[f"{h_idx}-{w_idx}"]]
-                old_v_cache = [x.to(device) if x is not None else None for x in prev_patch_dict_v[f"{h_idx}-{w_idx}"]]
+                # Load cached states to GPU only when needed
+                key = f"{h_idx}-{w_idx}"
+                if key in prev_patch_dict_k:
+                    old_k_cache = [x.to(device) if x is not None else None for x in prev_patch_dict_k[key]]
+                    old_v_cache = [x.to(device) if x is not None else None for x in prev_patch_dict_v[key]]
+                else:
+                    old_k_cache = None
+                    old_v_cache = None
             else:
                 old_k_cache = None
                 old_v_cache = None
             
-            # Add mixed precision
+            # Run inference with mixed precision
             with torch.cuda.amp.autocast():
                 out_patch, k_c, v_c = model(x.float(), old_k_cache, old_v_cache)
                 
-            # Keep computation on GPU until absolutely needed on CPU
-            patch_dict_k[f"{h_idx}-{w_idx}"] = [x.detach() if x is not None else None for x in k_c]
-            patch_dict_v[f"{h_idx}-{w_idx}"] = [x.detach() if x is not None else None for x in v_c]
+            # Immediately move results to CPU and free GPU memory
+            patch_dict_k[f"{h_idx}-{w_idx}"] = [x.detach().cpu() if x is not None else None for x in k_c]
+            patch_dict_v[f"{h_idx}-{w_idx}"] = [x.detach().cpu() if x is not None else None for x in v_c]
             
-            # Keep out_patch on the device 
-            out_patch_mask = torch.ones_like(out_patch)
-
-            E[..., h_idx:(h_idx+tile), w_idx:(w_idx+tile)].add_(out_patch)
+            # Move output to CPU and add to accumulated results
+            out_patch_cpu = out_patch.detach().cpu()
+            out_patch_mask = torch.ones_like(out_patch_cpu)
+            
+            E[..., h_idx:(h_idx+tile), w_idx:(w_idx+tile)].add_(out_patch_cpu)
             W[..., h_idx:(h_idx+tile), w_idx:(w_idx+tile)].add_(out_patch_mask)
+            
+            # Clear unnecessary references to free up memory
+            del out_patch, k_c, v_c, out_patch_cpu, out_patch_mask
+            if old_k_cache is not None:
+                del old_k_cache, old_v_cache
+            
+            # Force CUDA to release memory
+            torch.cuda.empty_cache()
     
+    # Move input tensors back to CPU to free GPU memory
+    img_lq_prev = img_lq_prev.cpu()
+    img_lq_curr = img_lq_curr.cpu()
+    
+    # Complete the final computation on CPU
     restored = E.div_(W)
     restored = torch.clamp(restored, 0, 1)
     
-    # Only move the final result to CPU when returning
-    return restored.cpu(), patch_dict_k, patch_dict_v
+    return restored, patch_dict_k, patch_dict_v
 
 def load_model(path, model):
     # device = torch.device("cpu")
