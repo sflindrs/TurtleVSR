@@ -122,6 +122,15 @@ def create_side_by_side_video(input_frames_dir, output_frames_dir, output_video_
 def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_video_path, fps=20):
     """
     Create a video with a sliding comparison between input and output frames
+    
+    Args:
+        input_frames_dir (str): Directory containing original input frames
+        output_frames_dir (str): Directory containing processed output frames
+        output_video_path (str): Path to save the output video
+        fps (int): Frames per second for the output video
+        
+    Returns:
+        str: Path to created video or error message
     """
     # Get all input frames (from the original directory)
     input_frames = sorted([
@@ -129,7 +138,7 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
         if f.endswith(('.png', '.jpg', '.jpeg'))
     ])
     
-    # Get all output frames - these should have consistent naming like "Frame_0001_Pred.png"
+    # Get all output frames - should have consistent naming like "Frame_00001_Pred.png"
     output_frames = sorted([
         f for f in os.listdir(output_frames_dir) 
         if 'Pred' in f and f.endswith('.png')
@@ -138,9 +147,15 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
     if not input_frames or not output_frames:
         return "Error: No frames found"
     
+    print(f"Input frames: {len(input_frames)}")
+    print(f"Output frames: {len(output_frames)}")
+    
     # Get frame dimensions from first input frame
     input_frame_path = os.path.join(input_frames_dir, input_frames[0])
     frame = cv2.imread(input_frame_path)
+    if frame is None:
+        return f"Error: Could not read first input frame at {input_frame_path}"
+        
     h, w, _ = frame.shape
     
     # Create video writer
@@ -149,9 +164,18 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
     
     # Create frame mapping from output frame names to frame numbers
     frame_map = {}
+    
+    # Check if we're using new padding format (Frame_00001_Pred.png) or old format
+    using_new_format = False
+    if output_frames and '_' in output_frames[0]:
+        parts = output_frames[0].split('_')
+        if len(parts) >= 2 and parts[0] == "Frame" and parts[1].isdigit():
+            using_new_format = True
+    
     for output_frame in output_frames:
-        # Extract frame number from names like "Frame_0001_Pred.png"
-        if '_' in output_frame:
+        # Extract frame number from names
+        frame_num = None
+        if using_new_format and '_' in output_frame:
             parts = output_frame.split('_')
             if len(parts) >= 2 and parts[0] == "Frame":
                 try:
@@ -159,6 +183,25 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
                     frame_map[frame_num] = output_frame
                 except ValueError:
                     continue
+        else:
+            # Fallback: try to extract frame number using regex
+            import re
+            match = re.search(r'(\d+)', output_frame)
+            if match:
+                try:
+                    frame_num = int(match.group(1))
+                    frame_map[frame_num] = output_frame
+                except ValueError:
+                    continue
+    
+    if not frame_map:
+        return "Error: Could not extract frame numbers from output frames"
+        
+    print(f"Extracted {len(frame_map)} frame mappings from output frames")
+    
+    # Use the number of input frames as the base for creating the video
+    frames_processed = 0
+    frame_errors = 0
     
     # Use input frames as base sequence and find corresponding output frames
     for i, input_frame in enumerate(input_frames):
@@ -169,6 +212,10 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
         
         # Read input frame
         input_img = cv2.imread(os.path.join(input_frames_dir, input_frame))
+        if input_img is None:
+            print(f"Warning: Could not read input frame {input_frame}")
+            frame_errors += 1
+            continue
         
         # Find corresponding output frame
         if frame_num in frame_map:
@@ -178,10 +225,15 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
             
             # Make sure the output image exists and has the right size
             if output_img is None or output_img.shape[:2] != input_img.shape[:2]:
+                print(f"Warning: Output frame {output_frame} is missing or has incorrect size")
+                print(f"Using input frame as fallback")
                 output_img = input_img.copy()  # Fallback to input if there's an issue
+                frame_errors += 1
         else:
             # If we don't have a matching output frame, use the input frame
+            print(f"Warning: No matching output frame for input frame {frame_num}")
             output_img = input_img.copy()
+            frame_errors += 1
         
         # Create combined frame with sliding comparison
         combined_frame = input_img.copy()
@@ -191,8 +243,117 @@ def create_comparison_with_slider(input_frames_dir, output_frames_dir, output_vi
         cv2.line(combined_frame, (slider_position, 0), (slider_position, h), (0, 255, 0), 2)
         
         video_writer.write(combined_frame)
+        frames_processed += 1
     
     video_writer.release()
+    
+    print(f"Video creation complete: {frames_processed} frames processed, {frame_errors} frame errors")
+    
+    if frame_errors > 0:
+        return f"Video created with {frame_errors} frame errors. Check logs for details."
+    
+    return output_video_path
+
+def create_regular_output_video(output_frames_dir, output_video_path, fps=20):
+    """
+    Create a video from processed output frames
+    
+    Args:
+        output_frames_dir (str): Directory containing processed output frames
+        output_video_path (str): Path to save the output video
+        fps (int): Frames per second for the output video
+        
+    Returns:
+        str: Path to created video or error message
+    """
+    # Get all output frames - look for files with "Pred" in the name
+    output_frames = sorted([
+        f for f in os.listdir(output_frames_dir) 
+        if f.endswith('.png') and 'Pred' in f
+    ])
+    
+    if not output_frames:
+        return "Error: No output frames found"
+    
+    print(f"Found {len(output_frames)} output frames")
+    
+    # Extract frame numbers to ensure proper ordering
+    frame_numbers = []
+    for frame_name in output_frames:
+        # Extract frame number using regex
+        import re
+        match = re.search(r'Frame_(\d+)_Pred', frame_name)
+        if match:
+            try:
+                frame_num = int(match.group(1))
+                frame_numbers.append((frame_num, frame_name))
+            except ValueError:
+                continue
+    
+    if not frame_numbers:
+        return "Error: Could not extract frame numbers from output frames"
+    
+    # Sort by frame number
+    frame_numbers.sort(key=lambda x: x[0])
+    ordered_frames = [item[1] for item in frame_numbers]
+    
+    # Verify that we have a continuous sequence with no gaps
+    if len(ordered_frames) > 1:
+        first_num = frame_numbers[0][0]
+        last_num = frame_numbers[-1][0]
+        expected_count = last_num - first_num + 1
+        
+        if len(ordered_frames) != expected_count:
+            print(f"Warning: Expected {expected_count} frames but found {len(ordered_frames)}")
+            print(f"First frame: {first_num}, Last frame: {last_num}")
+            
+            # Check for gaps in the sequence
+            actual_nums = set(item[0] for item in frame_numbers)
+            expected_nums = set(range(first_num, last_num + 1))
+            missing_nums = expected_nums - actual_nums
+            
+            if missing_nums:
+                print(f"Missing frame numbers: {sorted(missing_nums)}")
+    
+    # Read the first frame to get dimensions
+    sample_frame = cv2.imread(os.path.join(output_frames_dir, ordered_frames[0]))
+    if sample_frame is None:
+        return f"Error: Could not read first output frame at {os.path.join(output_frames_dir, ordered_frames[0])}"
+        
+    h, w, _ = sample_frame.shape
+    
+    # Create video writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    video_writer = cv2.VideoWriter(
+        output_video_path, 
+        fourcc, 
+        fps, 
+        (w, h)
+    )
+    
+    # Process frames in their correct numerical order
+    frames_processed = 0
+    frame_errors = 0
+    
+    for frame_name in ordered_frames:
+        frame_path = os.path.join(output_frames_dir, frame_name)
+        frame = cv2.imread(frame_path)
+        
+        if frame is None:
+            print(f"Warning: Could not read output frame {frame_name}")
+            frame_errors += 1
+            continue
+            
+        video_writer.write(frame)
+        frames_processed += 1
+                
+    video_writer.release()
+    
+    print(f"Video creation complete: {frames_processed} frames processed, {frame_errors} frame errors")
+    
+    if frame_errors > 0:
+        return f"Video created with {frame_errors} frame errors. Check logs for details."
+    
     return output_video_path
 
 def process_video(video_path, task_name, advanced_options, progress=gr.Progress()):
@@ -236,7 +397,10 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
         
         # Extract frames from video
         progress(0, "Extracting frames from video")
-        extract_frames(video_path, frames_dir)
+        num_frames = extract_frames(video_path, frames_dir)
+        
+        if num_frames == 0:
+            return None, None, "Failed to extract frames from video."
         
         # Run inference
         progress(0.3, "Running Turtle model inference")
@@ -251,11 +415,11 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
             model_type=model_type,
             do_pacthes=True,
             image_out_path=output_dir,
-            progress_callback=lambda value, text: progress(value, text)  # Add this line to pass progress updates
+            progress_callback=lambda value, text: progress(0.3 + 0.5 * value, text)
         )
         
         # Create result video
-        progress(0.8, "Creating result video")
+        progress(0.8, "Creating result videos")
         
         # Find the model output directory - it's structured as output_dir/task_name_job_id/frames_dir_basename
         model_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
@@ -265,64 +429,67 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
         # If the result_dir doesn't exist, use model_dir as a fallback
         if not os.path.exists(result_dir):
             result_dir = model_dir
+            
+        # Verify that result directory contains processed frames
+        output_frames = [f for f in os.listdir(result_dir) if 'Pred' in f and f.endswith('.png')]
+        if not output_frames:
+            return None, None, f"No output frames found in {result_dir}. Processing may have failed."
         
         # Get frame rate from the original video
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 30  # Default to 30 fps if we can't get the frame rate
         cap.release()
         
         # Create the comparison video with slider
+        progress(0.85, "Creating comparison video")
         comparison_video_path = os.path.join(temp_dir, f"comparison_{job_id}.mp4")
-        comparison_video_path = create_comparison_with_slider(
+        comparison_result = create_comparison_with_slider(
             frames_dir,
             result_dir,
             comparison_video_path,
             fps=fps
         )
         
-        # Create regular output video
+        if isinstance(comparison_result, str) and comparison_result.startswith("Error"):
+            print(f"Warning creating comparison video: {comparison_result}")
+        
+        # Create regular output video from just the processed frames
+        progress(0.95, "Creating output video")
         output_video_path = os.path.join(temp_dir, f"output_{job_id}.mp4")
+        output_result = create_regular_output_video(
+            result_dir,
+            output_video_path,
+            fps=fps
+        )
         
-        # Get all output frames - look for files with "Pred" in the name
-        output_frames = sorted([
-            f for f in os.listdir(result_dir) 
-            if f.endswith('.png') and 'Pred' in f
-        ])
-        
-        # Create a video from the output frames
-        if output_frames:
-            # Read the first frame to get dimensions
-            sample_frame = cv2.imread(os.path.join(result_dir, output_frames[0]))
-            h, w, _ = sample_frame.shape
-            
-            video_writer = cv2.VideoWriter(
-                output_video_path, 
-                cv2.VideoWriter_fourcc(*'mp4v'), 
-                fps, 
-                (w, h)
-            )
-            
-            for frame_name in output_frames:
-                frame = cv2.imread(os.path.join(result_dir, frame_name))
-                video_writer.write(frame)
-                
-            video_writer.release()
+        if isinstance(output_result, str) and output_result.startswith("Error"):
+            print(f"Warning creating output video: {output_result}")
         
         progress(1.0, "Processing complete")
         
-        # Verify files exist
-        if not os.path.exists(output_video_path):
-            return None, None, f"Failed to create output video. Check log for details."
+        # Check that both videos exist and are valid
+        output_video_exists = os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 0
+        comparison_video_exists = os.path.exists(comparison_video_path) and os.path.getsize(comparison_video_path) > 0
         
-        if not os.path.exists(comparison_video_path):
+        if not output_video_exists and not comparison_video_exists:
+            return None, None, "Failed to create output videos. Check logs for details."
+        
+        # Return results, with appropriate messages if one video failed
+        if not output_video_exists:
+            return None, comparison_video_path, "Comparison video created, but output video failed."
+        
+        if not comparison_video_exists:
             return output_video_path, None, "Output video created, but comparison video failed."
         
-        # Return results
         return output_video_path, comparison_video_path, "Processing completed successfully."
         
     except Exception as e:
         import traceback
         trace = traceback.format_exc()
+        print(f"Error during processing: {str(e)}")
+        print(trace)
         # Clean up on error
         return None, None, f"Error during processing: {str(e)}\n{trace}"
     
