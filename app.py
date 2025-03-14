@@ -191,10 +191,10 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
     """Process the uploaded video and return the result"""
     
     if video_path is None:
-        return None, "Please upload a video to process."
+        return None, None, "Please upload a video to process."
     
     if task_name not in SUPPORTED_TASKS:
-        return None, f"Unknown task: {task_name}. Supported tasks are: {', '.join(SUPPORTED_TASKS.keys())}"
+        return None, None, f"Unknown task: {task_name}. Supported tasks are: {', '.join(SUPPORTED_TASKS.keys())}"
     
     # Create temporary working directories
     job_id = generate_random_id()
@@ -242,15 +242,21 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
             save_image=True,
             model_type=model_type,
             do_pacthes=True,
-            image_out_path=output_dir
+            image_out_path=output_dir,
+            progress_callback=lambda value, text: progress(value, text)  # Add this line to pass progress updates
         )
         
         # Create result video
         progress(0.8, "Creating result video")
         
-        # The output directory structure is: output_dir/model_name/video_name/
-        result_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
-        os.makedirs(result_dir, exist_ok=True)
+        # Find the model output directory - it's structured as output_dir/task_name_job_id/frames_dir_basename
+        model_dir = os.path.join(output_dir, f"{task_name}_{job_id}")
+        frames_dir_basename = os.path.basename(frames_dir)
+        result_dir = os.path.join(model_dir, frames_dir_basename)
+        
+        # If the result_dir doesn't exist, use model_dir as a fallback
+        if not os.path.exists(result_dir):
+            result_dir = model_dir
         
         # Get frame rate from the original video
         cap = cv2.VideoCapture(video_path)
@@ -261,7 +267,7 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
         comparison_video_path = os.path.join(temp_dir, f"comparison_{job_id}.mp4")
         comparison_video_path = create_comparison_with_slider(
             frames_dir,
-            result_dir,  # This is where the output frames are
+            result_dir,
             comparison_video_path,
             fps=fps
         )
@@ -296,19 +302,26 @@ def process_video(video_path, task_name, advanced_options, progress=gr.Progress(
         
         progress(1.0, "Processing complete")
         
+        # Verify files exist
+        if not os.path.exists(output_video_path):
+            return None, None, f"Failed to create output video. Check log for details."
+        
+        if not os.path.exists(comparison_video_path):
+            return output_video_path, None, "Output video created, but comparison video failed."
+        
         # Return results
         return output_video_path, comparison_video_path, "Processing completed successfully."
         
     except Exception as e:
+        import traceback
+        trace = traceback.format_exc()
         # Clean up on error
-        return None, None, f"Error during processing: {str(e)}"
+        return None, None, f"Error during processing: {str(e)}\n{trace}"
     
     finally:
-        # Cleanup temporary files
-        try:
-            shutil.rmtree(temp_dir)
-        except:
-            pass
+        # Don't clean up immediately so we can debug if needed
+        # We can add a cleanup timer to remove these files after some time
+        pass
 
 def image_process(image_path, task_name, advanced_options, progress=gr.Progress()):
     """Process a single image and return the result"""
