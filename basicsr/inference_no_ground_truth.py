@@ -180,7 +180,7 @@ def run_inference(video_name, test_loader,
                   tile_overlap,
                   model_type,
                   progress_callback=None):
-
+    
     # Enable memory caching
     torch.backends.cudnn.benchmark = True
 
@@ -197,8 +197,15 @@ def run_inference(video_name, test_loader,
     k_cache, v_cache = None, None
     total_frames = len(test_loader.dataset)
     
+    # Ensure the directory for the model exists
+    base_path = image_out_path
+    base_path = os.path.join(base_path, model_name)
+    os.makedirs(base_path, exist_ok=True)
+    base_path = os.path.join(base_path, video_name)
+    os.makedirs(base_path, exist_ok=True)
+    
     for ix in range(total_frames):
-        # Calculate progress and update if callback is provided
+        # Update progress based on frame index
         if progress_callback is not None:
             # Convert to range 0.3-0.8 (assuming extraction was 0-0.3 and video creation will be 0.8-1.0)
             progress_value = 0.3 + (0.5 * (ix + 1) / total_frames)
@@ -224,41 +231,50 @@ def run_inference(video_name, test_loader,
         else:
             # superresolution
             if model_type == "SR":
-                previous_frame = torch.nn.functional.interpolate(previous_frame.unsqueeze(0), 
+                previous_frame_resized = torch.nn.functional.interpolate(previous_frame.unsqueeze(0), 
                                                                 scale_factor=1/4,
-                                                                mode="bicubic").squeeze(0)
-                current_frame = torch.nn.functional.interpolate(current_frame.unsqueeze(0), 
+                                                                mode="bicubic")
+                current_frame_resized = torch.nn.functional.interpolate(current_frame.unsqueeze(0), 
                                                                 scale_factor=1/4, 
-                                                                mode="bicubic").squeeze(0)
-            # do inference on whole frame if the memory can be fit.
-            x = torch.concat((previous_frame.unsqueeze(0), 
-                            current_frame.unsqueeze(0)), dim=0).unsqueeze(0).to(device)
-            x2, k_cache, v_cache = model(x, k_cache, v_cache)
+                                                                mode="bicubic")
+                x = torch.concat((previous_frame_resized, 
+                                current_frame_resized), dim=0).to(device)
+            else:
+                x = torch.concat((previous_frame.unsqueeze(0), 
+                                current_frame.unsqueeze(0)), dim=0).to(device)
+                
+            x2, k_cache, v_cache = model(x.unsqueeze(0), k_cache, v_cache)
             x2 = torch.clamp(x2, 0, 1)
 
         x2 = x2.squeeze(0)
         x2 = x2[:, :h, :w]
         
         if save_img:
-            # Create necessary directories
-            base_path = image_out_path
-            base_path = os.path.join(base_path, model_name)
-            os.makedirs(base_path, exist_ok=True)
-            base_path = os.path.join(base_path, video_name)
-            os.makedirs(base_path, exist_ok=True)
-
-            # Save both input and prediction images separately
-            file_name_inp = os.path.join(base_path, f"Frame_{ix+1}_Input.png") 
-            file_name_pred = os.path.join(base_path, f"Frame_{ix+1}_Pred.png")   
+            # Save input and output images with consistent frame numbers
+            file_name_inp = os.path.join(base_path, f"Frame_{ix+1:04d}_Input.png")
+            file_name_pred = os.path.join(base_path, f"Frame_{ix+1:04d}_Pred.png")
             
-            # Convert tensors to numpy arrays for saving
-            input_img = current_frame.permute(1, 2, 0).detach().cpu().numpy()
-            pred_img = x2.permute(1, 2, 0).detach().cpu().numpy()
+            # Convert tensor to numpy for OpenCV
+            current_np = (current_frame.permute(1, 2, 0).detach().cpu().numpy()*255).astype(np.uint8)
+            x2_np = (x2.permute(1, 2, 0).detach().cpu().numpy()*255).astype(np.uint8)
             
-            # Save images using OpenCV
-            cv2.imwrite(file_name_inp, cv2.cvtColor((input_img*255).astype(np.uint8), cv2.COLOR_RGB2BGR))
-            cv2.imwrite(file_name_pred, cv2.cvtColor((pred_img*255).astype(np.uint8), cv2.COLOR_RGB2BGR))
+            # Save with consistent naming pattern
+            cv2.imwrite(file_name_pred, cv2.cvtColor(x2_np, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(file_name_inp, cv2.cvtColor(current_np, cv2.COLOR_RGB2BGR))
+            
+            # Optionally save the side-by-side comparison
+            if False:  # Set to True if you want side-by-side images
+                fig, axs = plt.subplots(1, 2, figsize=(10,10))
+                axs[0].imshow(current_frame.permute(1, 2, 0).detach().cpu().numpy())
+                axs[1].imshow(x2.permute(1, 2, 0).detach().cpu().numpy())
+                axs[0].set_title('Input')
+                axs[1].set_title('Pred')
+                plt.tight_layout()
+                save_path = os.path.join(base_path, f"Frame_{ix+1:04d}_Compare.png")
+                plt.savefig(save_path, bbox_inches='tight')
+                plt.close()
 
+        # Use current frame as the previous frame for next iteration
         previous_frame = current_frame
         
         # Calculate and print time taken for current frame
@@ -267,7 +283,7 @@ def run_inference(video_name, test_loader,
         print(f"Frame {ix+1} processed in {frame_time:.3f} seconds")
         frame_start_time = time.time()
 
-    # Calculate and print time taken for current frame
+    # Calculate and print time taken for all frames
     end_time = time.time()
     frames_processed = len(test_loader.dataset)
     print(f"Processed {frames_processed} frames in {end_time - start_time:.2f} seconds")
