@@ -895,15 +895,7 @@ def create_ui():
     }
     """
     
-    # Import Gradio theme
-    dark_theme = gr.Theme(
-        css=css,
-        # Optional: You can customize colors further here
-        primary_hue=gr.themes.colors.blue,
-        secondary_hue=gr.themes.colors.gray
-    )
-    
-    with gr.Blocks(css=css, theme=dark_theme, title=title) as app:
+    with gr.Blocks(css=css, title=title) as app:
         current_job_id = gr.State(value=None)
         
         gr.Markdown("# Turtle 🐢", elem_id="title")
