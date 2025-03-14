@@ -993,4 +993,4 @@ For more information, see [the Turtle GitHub repository](https://github.com/kjan
 
 if __name__ == "__main__":
     app = create_turtle_gui()
-    app.launch(share=True)
+    app.launch(share=True, debug=True)
